@@ -1,0 +1,1443 @@
+<!-- llms.txt
+AI AGENTS: DartSort pipeline documentation.
+- Section 2: Full pipeline overview with decision-point flowchart
+- Section 3.X: Individual stage reference (8 stages)
+- Section 4: Configuration reference with bidirectional mapping
+- Section 5: Data flow, HDF5 storage, and checkpoint/resume logic
+- Section 7: Control flow decisions — all conditional branches
+- Section 8: AI guidance — invariants, glossary, refactoring targets
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DartSort Pipeline Reference</title>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareSourceCode",
+  "name": "DartSort",
+  "description": "Motion-aware, GPU-accelerated spike sorting pipeline for extracellular electrophysiology. Iteratively detects, clusters, and template-matches neural spikes from multi-channel probe recordings.",
+  "programmingLanguage": "Python",
+  "runtimePlatform": "Linux",
+  "codeRepository": "https://github.com/cwindolf/dartsort",
+  "targetProduct": {
+    "@type": "SoftwareApplication",
+    "name": "DartSort",
+    "applicationCategory": "ScientificApplication",
+    "operatingSystem": "Linux"
+  },
+  "dependencies": ["torch", "numpy", "spikeinterface", "h5py", "dredge"],
+  "version": "0.1.0"
+}
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<style>
+:root {
+  --bg: #ffffff;
+  --bg-alt: #f6f8fa;
+  --bg-code: #f0f2f5;
+  --text: #1a1a2e;
+  --text-muted: #5a5a7a;
+  --accent: #2563eb;
+  --accent-light: #dbeafe;
+  --border: #d1d5db;
+  --sidebar-w: 260px;
+  --header-h: 56px;
+  --success: #16a34a;
+  --warn: #d97706;
+  --danger: #dc2626;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --bg-alt: #161b22;
+    --bg-code: #1c2128;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --accent-light: #1c3a5e;
+    --border: #30363d;
+  }
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; scroll-padding-top: calc(var(--header-h) + 16px); }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  font-size: 15px;
+}
+
+/* Header */
+.site-header {
+  position: fixed; top: 0; left: 0; right: 0;
+  height: var(--header-h);
+  background: var(--bg-alt);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center;
+  padding: 0 24px;
+  z-index: 100;
+}
+.site-header h1 { font-size: 18px; font-weight: 700; }
+.site-header span { color: var(--text-muted); font-size: 14px; margin-left: 12px; }
+
+/* Sidebar */
+.sidebar {
+  position: fixed;
+  top: var(--header-h);
+  left: 0;
+  bottom: 0;
+  width: var(--sidebar-w);
+  overflow-y: auto;
+  background: var(--bg-alt);
+  border-right: 1px solid var(--border);
+  padding: 16px 0;
+  z-index: 90;
+  font-size: 13px;
+}
+.sidebar a {
+  display: block;
+  padding: 5px 20px;
+  color: var(--text-muted);
+  text-decoration: none;
+  border-left: 3px solid transparent;
+  transition: all 0.15s;
+}
+.sidebar a:hover, .sidebar a.active {
+  color: var(--accent);
+  border-left-color: var(--accent);
+  background: var(--accent-light);
+}
+.sidebar .nav-group { font-weight: 600; color: var(--text); padding: 12px 20px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+/* Main */
+.main {
+  margin-left: var(--sidebar-w);
+  margin-top: var(--header-h);
+  padding: 32px 40px 80px;
+  max-width: 960px;
+}
+h2 { font-size: 24px; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+h3 { font-size: 18px; margin: 28px 0 12px; }
+h4 { font-size: 15px; margin: 20px 0 8px; color: var(--text-muted); }
+p { margin: 8px 0; }
+ul, ol { margin: 8px 0 8px 24px; }
+li { margin: 4px 0; }
+code {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 13px;
+  background: var(--bg-code);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+pre {
+  background: var(--bg-code);
+  padding: 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 12px 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+pre code { background: none; padding: 0; }
+
+/* Details (collapsible sections) */
+details {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 16px 0;
+  background: var(--bg);
+}
+details[open] { background: var(--bg-alt); }
+summary {
+  padding: 14px 20px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 16px;
+  user-select: none;
+  list-style: none;
+}
+summary::before { content: '▸ '; color: var(--accent); }
+details[open] > summary::before { content: '▾ '; }
+summary::-webkit-details-marker { display: none; }
+.details-body { padding: 4px 20px 20px; }
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 13px;
+}
+th, td { padding: 8px 12px; border: 1px solid var(--border); text-align: left; }
+th { background: var(--bg-alt); font-weight: 600; }
+
+/* Mermaid */
+.mermaid { margin: 16px 0; }
+
+/* Tags */
+.tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.tag-input { background: #dbeafe; color: #1e40af; }
+.tag-output { background: #d1fae5; color: #065f46; }
+.tag-config { background: #fef3c7; color: #92400e; }
+.tag-file { background: #e0e7ff; color: #3730a3; }
+
+/* Invariant box */
+.invariant-box {
+  background: #fef2f2;
+  border-left: 4px solid var(--danger);
+  padding: 12px 16px;
+  border-radius: 0 6px 6px 0;
+  margin: 12px 0;
+}
+@media (prefers-color-scheme: dark) {
+  .invariant-box { background: #2a1215; }
+  .tag-input { background: #1e3a5f; color: #93c5fd; }
+  .tag-output { background: #14352a; color: #6ee7b7; }
+  .tag-config { background: #3b2e14; color: #fcd34d; }
+  .tag-file { background: #272554; color: #a5b4fc; }
+}
+
+/* Print */
+@media print {
+  .sidebar, .site-header { display: none; }
+  .main { margin: 0; padding: 20px; max-width: none; }
+  details { break-inside: avoid; }
+  details[open] > summary { page-break-after: avoid; }
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .sidebar { display: none; }
+  .main { margin-left: 0; padding: 16px; }
+}
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <h1>DartSort Pipeline Reference</h1>
+  <span>Motion-aware spike sorting &mdash; architecture &amp; internals</span>
+</header>
+
+<nav class="sidebar">
+  <div class="nav-group">Overview</div>
+  <a href="#overview">Pipeline Overview</a>
+
+  <div class="nav-group">Stages</div>
+  <a href="#stage-1">1. Preprocessing</a>
+  <a href="#stage-2">2. Detection</a>
+  <a href="#stage-3">3. Motion Estimation</a>
+  <a href="#stage-4">4. Featurization</a>
+  <a href="#stage-5">5. Clustering</a>
+  <a href="#stage-6">6. Template Estimation</a>
+  <a href="#stage-7">7. Template Matching</a>
+  <a href="#stage-8">8. Refinement &amp; Output</a>
+
+  <div class="nav-group">Reference</div>
+  <a href="#config">4. Configuration</a>
+  <a href="#dataflow">5. Data Flow &amp; Storage</a>
+  <a href="#checkpoint">5b. Checkpoint/Resume</a>
+  <a href="#patterns">6. Design Patterns</a>
+  <a href="#controlflow">7. Control Flow</a>
+  <a href="#ai-guidance">8. AI Guidance</a>
+  <a href="#invariants">8b. Design Invariants</a>
+</nav>
+
+<main class="main">
+
+<!-- ============================================================ -->
+<!-- SECTION 2: Pipeline Overview                                  -->
+<!-- ============================================================ -->
+<section id="overview">
+<h2>2. Pipeline Overview</h2>
+
+<h3>What DartSort Does</h3>
+<p>DartSort is a spike sorting pipeline for extracellular electrophysiology. It takes a multi-channel neural recording and produces sorted spike trains &mdash; each spike assigned to a putative neuron (unit). Key differentiators:</p>
+<ul>
+  <li><strong>Motion-aware:</strong> Probe drift correction is a first-class operation, applied before clustering and maintained throughout template matching.</li>
+  <li><strong>GPU-accelerated:</strong> PyTorch operations throughout for detection, featurization, clustering, and template matching.</li>
+  <li><strong>Iterative template matching:</strong> Detect &rarr; cluster &rarr; estimate templates &rarr; match &rarr; recluster &rarr; update templates &rarr; match again. Each iteration refines spike assignments.</li>
+</ul>
+
+<h3>Entry Points</h3>
+<p>The pipeline has two entry points in <code>main.py</code>:</p>
+<ul>
+  <li><code>dartsort()</code> (<code>main.py:79-201</code>) &mdash; user-facing API. Handles config conversion, preprocessing, tmpdir management, and error trapping.</li>
+  <li><code>_dartsort_impl()</code> (<code>main.py:204-419</code>) &mdash; internal implementation with all pipeline logic.</li>
+</ul>
+
+<h3>Full Pipeline Flowchart</h3>
+<div class="mermaid">
+flowchart TD
+    A["<b>1. Preprocessing</b><br/>Standardize + filter traces<br/><i>preprocess_util.py</i>"] --> B
+    B["<b>2. Initial Detection</b><br/>Threshold / Subtract / Match<br/><i>main.py:258-275</i>"] --> C
+    C{"detect_only?"}
+    C -->|Yes| EXIT1["Return sorting"]
+    C -->|No| D
+    D["<b>3. Motion Estimation</b><br/>DREDge drift tracking<br/><i>main.py:277-294</i>"] --> E
+    E{"dredge_only?"}
+    E -->|Yes| EXIT2["Return sorting"]
+    E -->|No| F
+    F["<b>4. Featurization</b><br/>PCA + Localization<br/><i>transform/pipeline.py</i>"] --> G
+    G["<b>5. Initial Clustering</b><br/>GMM + refinement passes<br/><i>main.py:300-328</i>"] --> H
+
+    subgraph LOOP["Matching Loop (steps 1..N)"]
+      H["<b>6. Template Estimation</b><br/>Realign → SVD → estimate<br/><i>templates/postprocess_util.py</i>"] --> I
+      I["<b>7. Template Matching</b><br/>Convolution-based peeler<br/><i>main.py:353-376</i>"] --> J
+      J{"final &amp; !final_refinement?"}
+      J -->|Yes| K["Break loop"]
+      J -->|No| L["<b>Recluster</b><br/><i>main.py:381-402</i>"]
+      L --> H
+    end
+
+    K --> M["<b>8. Finalization</b><br/>Save sorting, cleanup<br/><i>main.py:404-419</i>"]
+    L -.->|"last iteration"| M
+</div>
+
+<h3>Execution Model</h3>
+<p>The pipeline is <strong>iterative</strong>. After initial detection and clustering, it enters a matching loop (<code>main.py:334-402</code>) that runs <code>matching_iterations</code> times (default: configurable, typically 1-3). Each iteration: estimate templates from current labels &rarr; match templates against the full recording &rarr; recluster the combined spike set &rarr; repeat. This converges toward stable unit assignments.</p>
+</section>
+
+<!-- ============================================================ -->
+<!-- SECTION 3: Stage-by-Stage Reference                           -->
+<!-- ============================================================ -->
+<h2>3. Stage-by-Stage Reference</h2>
+
+<!-- Stage 1: Preprocessing -->
+<details id="stage-1">
+<summary>Stage 1: Preprocessing</summary>
+<div class="details-body">
+
+<div class="mermaid">
+flowchart LR
+    A["Raw int16 traces"] --> B["Highpass filter"]
+    B --> C["Standardize<br/>(z-score per channel)"]
+    C --> D{"CMR?"}
+    D -->|ibllikecmr| E["Common median<br/>referencing"]
+    D -->|none| F["Pass through"]
+    E --> G["float32/float16<br/>output"]
+    F --> G
+</div>
+
+<h4>Inputs</h4>
+<table>
+  <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>recording</code></td><td><code>BaseRecording</code></td><td>SpikeInterface recording object (any format)</td></tr>
+</table>
+
+<h4>Outputs</h4>
+<table>
+  <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>recording</code></td><td><code>BaseRecording</code></td><td>Standardized, filtered recording in float32 or float16</td></tr>
+</table>
+
+<h4>Algorithm</h4>
+<p>Standardizes raw voltage traces via z-score normalization per channel, applies highpass filtering, and optionally applies common median referencing (CMR) or spatial highpass filtering. The output dtype is configurable.</p>
+
+<h4>Key Files</h4>
+<ul>
+  <li><code>util/preprocess_util.py</code> &mdash; <code>preprocess()</code> function</li>
+  <li><code>main.py:133</code> &mdash; invocation in pipeline</li>
+</ul>
+
+<h4>Configuration</h4>
+<table>
+  <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
+  <tr><td><code>preprocessing</code></td><td><code>str</code></td><td><code>"ibllikecmr"</code></td><td>Strategy: <code>ibllikecmr</code>, <code>ibllike</code>, <code>standardize</code>, <code>none</code></td></tr>
+  <tr><td><code>preprocessing_dtype</code></td><td><code>str</code></td><td><code>"float32"</code></td><td><code>float16</code> or <code>float32</code></td></tr>
+</table>
+
+<h4>Design Rationale</h4>
+<p>DartSort expects standardized input (not raw int16 data). Preprocessing normalizes SNR units across channels, which is required for consistent threshold-based detection downstream. IBL-style CMR removes correlated noise across channels.</p>
+
+<h4>Preconditions</h4>
+<p>None &mdash; this is the first stage. The recording must be a valid SpikeInterface <code>BaseRecording</code>.</p>
+</div>
+</details>
+
+<!-- Stage 2: Detection -->
+<details id="stage-2">
+<summary>Stage 2: Initial Detection</summary>
+<div class="details-body">
+
+<div class="mermaid">
+flowchart TD
+    A["Preprocessed traces"] --> B{"detection_type?"}
+    B -->|"threshold"| C["Threshold detection<br/><code>threshold()</code><br/><i>main.py:694-740</i>"]
+    B -->|"subtract"| D["Subtraction peeler<br/><code>subtract()</code><br/><i>main.py:505-553</i>"]
+    B -->|"match"| E["Template matching<br/><code>match()</code><br/><i>main.py:556-655</i>"]
+    C --> F["detect_and_deduplicate()"]
+    D --> G["SubtractionPeeler.from_config()"]
+    E --> H["ObjectiveUpdateTMPeeler"]
+    F --> I["run_peeler()<br/><i>peel_util.py:20-152</i>"]
+    G --> I
+    H --> I
+    I --> J["DARTsortSorting<br/>(times, channels, features)"]
+</div>
+
+<h4>Inputs</h4>
+<table>
+  <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>recording</code></td><td><code>BaseRecording</code></td><td>Preprocessed recording</td></tr>
+  <tr><td><code>cfg</code></td><td><code>DARTsortInternalConfig</code></td><td>Pipeline configuration</td></tr>
+  <tr><td><code>motion</code></td><td><code>MotionInfo | None</code></td><td>Optional precomputed motion</td></tr>
+</table>
+
+<h4>Outputs</h4>
+<table>
+  <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>sorting</code></td><td><code>DARTsortSorting</code></td><td>Detected spikes with times, channels, and initial features</td></tr>
+</table>
+
+<h4>Algorithm</h4>
+<p>Dispatches to one of three detection methods based on <code>cfg.detection_type</code>. All three ultimately produce a <code>DARTsortSorting</code> via <code>run_peeler()</code> (<code>peel_util.py:20-152</code>):</p>
+<ol>
+  <li><strong>Threshold</strong> (<code>main.py:694-740</code>): Simple amplitude-based peak detection with temporal/spatial deduplication. Creates a <code>Threshold</code> peeler.</li>
+  <li><strong>Subtraction</strong> (<code>main.py:505-553</code>): Iteratively detects and subtracts spikes from the residual. Creates a <code>SubtractionPeeler</code>. Supports <code>fit_only</code> mode.</li>
+  <li><strong>Template matching</strong> (<code>main.py:556-655</code>): Matches against a template library (requires precomputed templates or a prior sorting). Creates an <code>ObjectiveUpdateTemplateMatchingPeeler</code>.</li>
+</ol>
+
+<h4>Key Files</h4>
+<ul>
+  <li><code>main.py:258-275</code> &mdash; initial detection invocation and <code>detect_only</code> early exit</li>
+  <li><code>main.py:422-449</code> &mdash; <code>initial_detection()</code> function</li>
+  <li><code>peel/threshold.py</code> &mdash; <code>Threshold</code> class</li>
+  <li><code>peel/subtract.py</code> &mdash; <code>SubtractionPeeler</code> class</li>
+  <li><code>peel/matching.py</code> &mdash; <code>ObjectiveUpdateTemplateMatchingPeeler</code></li>
+  <li><code>peel_util.py:20-152</code> &mdash; <code>run_peeler()</code> orchestration</li>
+  <li><code>detect/detect.py</code> &mdash; <code>detect_and_deduplicate()</code></li>
+</ul>
+
+<h4>Configuration</h4>
+<table>
+  <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
+  <tr><td><code>detection_type</code></td><td><code>str</code></td><td><code>"subtract"</code></td><td><code>threshold</code>, <code>subtract</code>, or <code>match</code></td></tr>
+  <tr><td><code>voltage_threshold</code></td><td><code>float</code></td><td><code>3.0</code></td><td>SNR threshold in standard deviations</td></tr>
+  <tr><td><code>peak_sign</code></td><td><code>str</code></td><td><code>"neg"</code></td><td><code>neg</code>, <code>pos</code>, or <code>both</code></td></tr>
+  <tr><td><code>ms_before</code></td><td><code>float</code></td><td><code>1.4</code></td><td>Waveform snippet before peak (ms)</td></tr>
+  <tr><td><code>ms_after</code></td><td><code>float</code></td><td><code>2.6</code></td><td>Waveform snippet after peak (ms)</td></tr>
+  <tr><td><code>detect_only</code></td><td><code>bool</code></td><td><code>False</code></td><td>Exit pipeline after detection</td></tr>
+</table>
+
+<h4>Design Rationale</h4>
+<p>Three detection methods serve different use cases: threshold is fastest, subtraction handles overlapping spikes by iteratively removing them, and template matching uses prior knowledge for maximum accuracy in later iterations. All share the same peeler interface for composability.</p>
+
+<h4>Preconditions</h4>
+<p>Recording must be preprocessed (standardized). If <code>detection_type == "match"</code>, precomputed templates or a prior sorting must be available.</p>
+</div>
+</details>
+
+<!-- Stage 3: Motion Estimation -->
+<details id="stage-3">
+<summary>Stage 3: Motion Estimation</summary>
+<div class="details-body">
+
+<div class="mermaid">
+flowchart TD
+    subgraph INPUTS["4 Entry Paths"]
+      P1["User provides<br/><code>motion: MotionInfo</code>"]
+      P2["User provides<br/><code>si_motion: SI Motion</code>"]
+      P3["User provides<br/><code>dredge_motion_est</code>"]
+      P4["No external motion"]
+    end
+
+    P1 -->|"use as-is"| OUT["MotionInfo output"]
+    P2 -->|"MotionInfo.from_motion_est()"| OUT
+    P3 -->|"MotionInfo.from_motion_est()"| OUT
+    P4 --> CHK{"motion.pkl exists?"}
+    CHK -->|Yes| LOAD["Load from disk"]
+    CHK -->|No| PEAKS{"motion_needs_peaks()?"}
+    PEAKS -->|Yes| DETECT["detect_for_motion()<br/>threshold detection"]
+    PEAKS -->|No| EST["Use existing localizations"]
+    DETECT --> DREDGE["dredge_estimate_motion()<br/>DREDge algorithm"]
+    EST --> DREDGE
+    DREDGE --> SAVE["Save to motion.pkl"]
+    LOAD --> OUT
+    SAVE --> OUT
+</div>
+
+<h4>Inputs</h4>
+<table>
+  <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>sorting</code></td><td><code>DARTsortSorting</code></td><td>Detected spikes with localizations</td></tr>
+  <tr><td><code>recording</code></td><td><code>BaseRecording</code></td><td>Preprocessed recording</td></tr>
+  <tr><td><code>motion</code></td><td><code>MotionInfo | None</code></td><td>Optional user-provided motion</td></tr>
+  <tr><td><code>si_motion</code></td><td><code>SI Motion | None</code></td><td>Optional SpikeInterface Motion object</td></tr>
+  <tr><td><code>dredge_motion_est</code></td><td><code>MotionEstimate | None</code></td><td>Optional DREDge MotionEstimate</td></tr>
+</table>
+
+<h4>Outputs</h4>
+<table>
+  <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>motion</code></td><td><code>MotionInfo</code></td><td>Displacement vs. time along the probe axis</td></tr>
+</table>
+
+<h4>Algorithm</h4>
+<p>Estimates probe drift over time using spike localizations. The DREDge algorithm bins spikes temporally and spatially, then estimates displacement per time bin. The resulting <code>MotionInfo</code> object is used for motion-corrected feature extraction downstream.</p>
+<p>There are <strong>4 alternative entry paths</strong> (see diagram above), resolved at <code>main.py:227-252</code>:</p>
+<ol>
+  <li>User provides <code>motion: MotionInfo</code> directly &rarr; use as-is</li>
+  <li>User provides <code>si_motion: SpikeInterface Motion</code> &rarr; convert via <code>MotionInfo.from_motion_est()</code></li>
+  <li>User provides <code>dredge_motion_est: DREDge MotionEstimate</code> &rarr; convert via <code>MotionInfo.from_motion_est()</code></li>
+  <li>No external motion &rarr; DartSort estimates internally via <code>get_motion_info()</code></li>
+</ol>
+
+<h4>Key Files</h4>
+<ul>
+  <li><code>main.py:277-294</code> &mdash; motion estimation invocation</li>
+  <li><code>main.py:227-252</code> &mdash; 4-path motion resolution at resume time</li>
+  <li><code>util/motion.py</code> &mdash; <code>MotionInfo</code> class, <code>get_motion_info()</code></li>
+  <li><code>main_util.py</code> &mdash; <code>motion_needs_peaks()</code></li>
+</ul>
+
+<h4>Configuration</h4>
+<table>
+  <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
+  <tr><td><code>do_motion_estimation</code></td><td><code>bool</code></td><td><code>True</code></td><td>Enable/disable motion estimation</td></tr>
+  <tr><td><code>dredge_only</code></td><td><code>bool</code></td><td><code>False</code></td><td>Exit pipeline after motion estimation (<code>main.py:296-298</code>)</td></tr>
+  <tr><td><code>motion_estimation_cfg</code></td><td><code>MotionEstimationConfig</code></td><td>&mdash;</td><td>DREDge-specific parameters</td></tr>
+</table>
+
+<h4>Design Rationale</h4>
+<p>Motion estimation happens <strong>after</strong> initial detection but <strong>before</strong> clustering. This ordering is an invariant: spatial correction must occur before feature extraction for correct unit separation. Users can bypass estimation entirely by providing precomputed motion.</p>
+</div>
+</details>
+
+<!-- Stage 4: Featurization -->
+<details id="stage-4">
+<summary>Stage 4: Featurization &amp; Localization</summary>
+<div class="details-body">
+
+<div class="mermaid">
+flowchart LR
+    A["Raw waveforms<br/>(n_spikes, n_time, n_channels)"] --> B["Whitening<br/><i>whiten.py</i>"]
+    B --> C["Temporal PCA<br/><i>temporal_pca.py</i>"]
+    C --> D["Localization NN<br/><i>amortized_localization.py</i>"]
+    D --> E["Denoising<br/><i>supervised_denoiser.py</i>"]
+    E --> F["Dimensionality reduction<br/><i>reduction.py</i>"]
+    F --> G["Amplitude estimation<br/><i>amplitudes.py</i>"]
+    G --> H["Feature vectors<br/>stored in HDF5"]
+</div>
+
+<h4>Inputs</h4>
+<table>
+  <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>waveforms</code></td><td><code>float32[n_spikes, n_time, n_channels]</code></td><td>Raw waveform snippets around detected peaks</td></tr>
+  <tr><td><code>motion</code></td><td><code>MotionInfo</code></td><td>Drift correction for spatial features</td></tr>
+</table>
+
+<h4>Outputs</h4>
+<table>
+  <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>point_source_localizations</code></td><td><code>float32[n_spikes, 4]</code></td><td>(x, y, z, alpha) spike positions</td></tr>
+  <tr><td><code>collisioncleaned_waveforms</code></td><td><code>float32[n_spikes, n_time, n_channels]</code></td><td>Denoised waveforms</td></tr>
+  <tr><td><code>features_pca</code></td><td><code>float32[n_spikes, n_components]</code></td><td>PCA-reduced features for clustering</td></tr>
+</table>
+
+<h4>Algorithm</h4>
+<p>Featurization is a composable <code>WaveformPipeline</code> of transformers, each with <code>.fit()</code>, <code>.transform()</code>, and <code>.fit_transform()</code> methods. The pipeline chains: whitening (decorrelate channels via noise covariance) &rarr; temporal PCA (reduce time dimension, e.g. 121 timepoints &rarr; 20 PCs) &rarr; neural-net localization (pretrained on simulated data, predicts x/y/z/alpha) &rarr; denoising &rarr; dimensionality reduction &rarr; amplitude estimation.</p>
+
+<h4>Key Files</h4>
+<ul>
+  <li><code>transform/pipeline.py</code> &mdash; <code>WaveformPipeline</code> orchestrator</li>
+  <li><code>transform/amortized_localization.py</code> &mdash; <code>AmortizedLocalization</code> neural net</li>
+  <li><code>transform/temporal_pca.py</code> &mdash; <code>TemporalPCA</code></li>
+  <li><code>transform/whiten.py</code> &mdash; <code>Whitener</code></li>
+  <li><code>transform/supervised_denoiser.py</code> &mdash; supervised denoising</li>
+  <li><code>transform/reduction.py</code> &mdash; dimensionality reduction</li>
+  <li><code>transform/amplitudes.py</code> &mdash; amplitude estimation</li>
+</ul>
+
+<h4>Configuration</h4>
+<table>
+  <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
+  <tr><td><code>featurization_cfg.do_localization</code></td><td><code>bool</code></td><td><code>True</code></td><td>Run localization neural net</td></tr>
+  <tr><td><code>featurization_cfg.tpca_from_templates</code></td><td><code>bool</code></td><td><code>False</code></td><td>Fit TPCA basis from templates instead of data</td></tr>
+  <tr><td><code>featurization_cfg.denoise_only</code></td><td><code>bool</code></td><td><code>False</code></td><td>Skip localization, only denoise</td></tr>
+</table>
+
+<h4>Design Rationale</h4>
+<p>Neural-net localization over analytical methods: the pretrained NN is faster and more robust across probe geometries than point-source model fitting. The pipeline pattern allows each transform to be independently configured, swapped, or disabled.</p>
+</div>
+</details>
+
+<!-- Stage 5: Clustering -->
+<details id="stage-5">
+<summary>Stage 5: Clustering</summary>
+<div class="details-body">
+
+<div class="mermaid">
+sequenceDiagram
+    participant M as main.py
+    participant C as cluster()
+    participant F as Feature Extraction
+    participant CL as Clusterer
+    participant R1 as pre_refinement
+    participant R2 as initial_refinement
+    participant R3 as post_refinement(s)
+
+    M->>C: cluster(sorting, motion, refinement_cfgs)
+    C->>F: SimpleMatrixFeatures(sorting, motion)
+    F-->>C: feature matrix
+    C->>CL: get_clusterer(clustering_cfg)
+    CL-->>C: clusterer instance
+    Note over C: If clusterer.needs_stable_features()
+    C->>F: StableWaveformFeatures(sorting, motion)
+    F-->>C: stable features
+    C->>CL: clusterer.cluster(features)
+    CL-->>C: initial labels
+
+    Note over C,R3: Refinement passes (ordered)
+    C->>R1: pre_refinement_cfg
+    R1-->>C: refined labels (pass 1)
+    C->>R2: initial_refinement_cfg
+    R2-->>C: refined labels (pass 2)
+    C->>R3: post_refinement_cfgs (list expansion)
+    R3-->>C: refined labels (pass 3+)
+
+    C-->>M: DARTsortSorting with labels
+    M->>M: ds_save_intermediate_labels("refined0")
+</div>
+
+<h4>Inputs</h4>
+<table>
+  <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>recording</code></td><td><code>BaseRecording</code></td><td>Preprocessed recording</td></tr>
+  <tr><td><code>sorting</code></td><td><code>DARTsortSorting</code></td><td>Detected spikes with features</td></tr>
+  <tr><td><code>motion</code></td><td><code>MotionInfo</code></td><td>Motion estimate for spatial correction</td></tr>
+  <tr><td><code>clustering_cfg</code></td><td><code>ClusteringConfig</code></td><td>Clustering algorithm parameters</td></tr>
+  <tr><td><code>clustering_features_cfg</code></td><td><code>ClusteringFeaturesConfig</code></td><td>Feature extraction parameters</td></tr>
+  <tr><td><code>refinement_cfgs</code></td><td><code>list[RefinementConfig]</code></td><td>Ordered list of refinement passes</td></tr>
+</table>
+
+<h4>Outputs</h4>
+<table>
+  <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>sorting</code></td><td><code>DARTsortSorting</code></td><td>Sorting with unit labels assigned</td></tr>
+</table>
+
+<h4>Algorithm</h4>
+<p>The <code>cluster()</code> function (<code>main.py:743-801</code>) performs:</p>
+<ol>
+  <li><strong>Feature extraction</strong> (<code>main.py:761-768</code>): Create <code>SimpleMatrixFeatures</code> from spike data using PCA + localizations.</li>
+  <li><strong>Get clusterer</strong> (<code>main.py:770-778</code>): Factory method <code>get_clusterer()</code> selects algorithm (default: iterative split-merge GMM).</li>
+  <li><strong>Stable features</strong> (<code>main.py:779-788</code>): Created only if <code>clusterer.needs_stable_features()</code> &mdash; used for motion-aware refinement.</li>
+  <li><strong>Run clustering</strong> (<code>main.py:790-796</code>): <code>clusterer.cluster()</code> returns updated sorting with labels.</li>
+  <li><strong>GPU cleanup</strong> (<code>main.py:799</code>)</li>
+</ol>
+
+<h4>Refinement Loop Internals</h4>
+<p>The multi-pass refinement architecture is controlled by <code>_matching_step_cfgs()</code> (<code>main.py:349-351</code>), which returns <code>(clus_cfg, clfeat_cfg, ref_cfgs, feat_cfg, samp_cfg)</code>:</p>
+<ul>
+  <li><strong>Initial clustering (step 0)</strong> uses 3 refinement passes (<code>main.py:300-305</code>):
+    <ol>
+      <li><code>pre_refinement_cfg</code> &mdash; pre-processing refinement</li>
+      <li><code>initial_refinement_cfg</code> &mdash; main refinement</li>
+      <li><code>*post_refinement_cfgs</code> &mdash; post-processing refinement(s) (list expansion)</li>
+    </ol>
+  </li>
+  <li><strong>Matching step clustering</strong> varies by context (<code>main.py:381-402</code>):
+    <ul>
+      <li>Final step + subsampling + TMM &rarr; 1 pass (<code>agglomerate_cfg</code> only)</li>
+      <li>Other steps &rarr; 3 passes (pre, refinement, agglomerate)</li>
+    </ul>
+  </li>
+  <li>The <code>recluster_after_first_matching</code> flag controls whether clustering runs after matching step 1.</li>
+</ul>
+
+<h4>Key Files</h4>
+<ul>
+  <li><code>main.py:300-328</code> &mdash; initial clustering invocation</li>
+  <li><code>main.py:381-402</code> &mdash; matching-step clustering</li>
+  <li><code>main.py:743-801</code> &mdash; <code>cluster()</code> internals</li>
+  <li><code>main.py:349-351</code> &mdash; <code>_matching_step_cfgs()</code></li>
+  <li><code>clustering/clustering.py</code> &mdash; main clustering logic, <code>get_clusterer()</code></li>
+  <li><code>clustering/mixture.py</code> &mdash; Gaussian mixture models</li>
+  <li><code>clustering/agglomerate.py</code> &mdash; hierarchical clustering</li>
+  <li><code>clustering/merge.py</code> &mdash; cluster merging</li>
+</ul>
+
+<h4>Configuration</h4>
+<table>
+  <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
+  <tr><td><code>clustering_cfg</code></td><td><code>ClusteringConfig</code></td><td>&mdash;</td><td>Algorithm parameters (min_cluster_size, etc.)</td></tr>
+  <tr><td><code>pre_refinement_cfg</code></td><td><code>RefinementConfig</code></td><td>&mdash;</td><td>Pre-processing refinement pass</td></tr>
+  <tr><td><code>initial_refinement_cfg</code></td><td><code>RefinementConfig</code></td><td>&mdash;</td><td>Main refinement pass</td></tr>
+  <tr><td><code>post_refinement_cfgs</code></td><td><code>list[RefinementConfig]</code></td><td>&mdash;</td><td>Post-processing refinement passes</td></tr>
+  <tr><td><code>recluster_after_first_matching</code></td><td><code>bool</code></td><td><code>False</code></td><td>Run clustering after matching step 1</td></tr>
+</table>
+</div>
+</details>
+
+<!-- Stage 6: Template Estimation -->
+<details id="stage-6">
+<summary>Stage 6: Template Estimation</summary>
+<div class="details-body">
+
+<div class="mermaid">
+flowchart TD
+    A["DARTsortSorting<br/>with unit labels"] --> B["realign()<br/>Sub-sample spike alignment"]
+    B --> C["mask_out_units()<br/>Filter low-count/SNR units"]
+    C --> D{"tpca_from_templates?"}
+    D -->|Yes| E["fit_tsvd()<br/>Fit TSVD basis"]
+    D -->|No| F["Skip TSVD fit"]
+    E --> G["Estimate denoised templates<br/>(weighted mean per unit)"]
+    F --> G
+    G --> H{"Merge configured?"}
+    H -->|Yes| I["Merge similar templates"]
+    H -->|No| J["Skip merge"]
+    I --> K["SVD compress<br/>template ≈ U·S·V'"]
+    J --> K
+    K --> L["Save template_data.npz<br/>TemplateData + LowRankTemplates"]
+</div>
+
+<h4>Inputs</h4>
+<table>
+  <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>sorting</code></td><td><code>DARTsortSorting</code></td><td>Sorting with unit labels</td></tr>
+  <tr><td><code>recording</code></td><td><code>BaseRecording</code></td><td>Preprocessed recording</td></tr>
+  <tr><td><code>motion</code></td><td><code>MotionInfo</code></td><td>Motion correction</td></tr>
+</table>
+
+<h4>Outputs</h4>
+<table>
+  <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>template_data</code></td><td><code>TemplateData</code></td><td>Contains <code>LowRankTemplates</code> and <code>CompressedUpsampledTemplates</code></td></tr>
+  <tr><td><code>sorting</code></td><td><code>DARTsortSorting</code></td><td>Updated sorting (units may be filtered/merged)</td></tr>
+</table>
+
+<h4>Algorithm</h4>
+<p><code>estimate_template_library()</code> in <code>templates/postprocess_util.py</code>:</p>
+<ol>
+  <li><strong>Realign</strong>: Sub-sample spike alignment for accurate template averaging.</li>
+  <li><strong>Filter</strong>: <code>mask_out_units()</code> removes units below minimum count or SNR thresholds.</li>
+  <li><strong>TSVD fit</strong>: If <code>tpca_from_templates</code>, fit temporal SVD basis from template waveforms.</li>
+  <li><strong>Estimate</strong>: Compute weighted mean waveform per unit (the template).</li>
+  <li><strong>Merge</strong>: Optionally merge templates with high similarity.</li>
+  <li><strong>SVD compress</strong>: Each template is approximated as <code>U @ S @ V.T</code>, keeping top-k singular vectors. This reduces storage and enables efficient convolution-based matching.</li>
+</ol>
+
+<h4>Key Files</h4>
+<ul>
+  <li><code>templates/postprocess_util.py</code> &mdash; <code>estimate_template_library()</code></li>
+  <li><code>templates/templates.py</code> &mdash; <code>TemplateData</code> class</li>
+  <li><code>templates/template_util.py</code> &mdash; SVD compression, upsampling</li>
+  <li><code>templates/realignment.py</code> &mdash; sub-sample alignment</li>
+  <li><code>templates/get_templates.py</code> &mdash; extract templates from units</li>
+  <li><code>main.py:588-624</code> &mdash; template estimation within <code>match()</code></li>
+</ul>
+
+<h4>Configuration</h4>
+<table>
+  <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
+  <tr><td><code>matching_cfg.min_template_ptp</code></td><td><code>float</code></td><td>&mdash;</td><td>Filter templates by peak-to-peak amplitude</td></tr>
+  <tr><td><code>matching_cfg.min_template_snr</code></td><td><code>float</code></td><td>&mdash;</td><td>Filter templates by signal-to-noise ratio</td></tr>
+  <tr><td><code>matching_cfg.min_template_count</code></td><td><code>int</code></td><td>&mdash;</td><td>Filter templates by spike count</td></tr>
+  <tr><td><code>matching_cfg.precomputed_templates_npz</code></td><td><code>str | None</code></td><td><code>None</code></td><td>Path to pre-fit templates (skip estimation)</td></tr>
+</table>
+
+<h4>Design Rationale</h4>
+<p>SVD compression is a memory/performance invariant: templates must be compressed before matching. The matching peeler expects <code>LowRankTemplates</code> for efficient convolution. Template upsampling enables sub-sample-precision spike time alignment.</p>
+</div>
+</details>
+
+<!-- Stage 7: Template Matching -->
+<details id="stage-7">
+<summary>Stage 7: Template Matching</summary>
+<div class="details-body">
+
+<div class="mermaid">
+sequenceDiagram
+    participant M as Matching Loop<br/>main.py:334-402
+    participant TL as Template Library
+    participant P as Peeler
+    participant R as run_peeler()
+    participant CL as Recluster
+
+    loop step in range(next_step, matching_iterations+1)
+        M->>TL: estimate_template_library(sorting, motion)
+        TL-->>M: template_data, updated sorting
+        M->>P: ObjectiveUpdateTMPeeler.from_config(template_data)
+        M->>R: run_peeler(peeler, recording)
+        Note over R: peel_util.py:20-152
+        R->>R: peeler.load_or_fit_and_save_models()
+        R->>R: peeler.peel() — detect by convolution
+        R->>R: Extract residual snippets (optional)
+        R->>R: Run localization (optional)
+        R-->>M: DARTsortSorting from matching{step}.h5
+
+        alt is_final AND NOT final_refinement
+            M->>M: break
+        else clustering needed
+            M->>CL: cluster(sorting, step_ref_cfgs)
+            CL-->>M: sorting with refined labels
+            M->>M: save refined{step}_labels.npy
+        end
+    end
+</div>
+
+<h4>Inputs</h4>
+<table>
+  <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>sorting</code></td><td><code>DARTsortSorting</code></td><td>Current sorting with labels from previous step</td></tr>
+  <tr><td><code>recording</code></td><td><code>BaseRecording</code></td><td>Preprocessed recording</td></tr>
+  <tr><td><code>motion</code></td><td><code>MotionInfo</code></td><td>Motion correction</td></tr>
+  <tr><td><code>matching_cfg</code></td><td><code>MatchingConfig</code></td><td>Matching parameters</td></tr>
+</table>
+
+<h4>Outputs</h4>
+<table>
+  <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>sorting</code></td><td><code>DARTsortSorting</code></td><td>Updated sorting with new detections from template matching</td></tr>
+</table>
+
+<h4>Algorithm</h4>
+<p>The matching loop (<code>main.py:334-402</code>) iterates <code>range(next_step, matching_iterations + 1)</code>. For each step:</p>
+<ol>
+  <li><strong>Template estimation</strong> (<code>main.py:588-624</code>): Build template library from current labels (skipped if <code>precomputed_templates_npz</code> is set).</li>
+  <li><strong>Peeler creation</strong> (<code>main.py:626-635</code>): Create <code>ObjectiveUpdateTemplateMatchingPeeler</code>.</li>
+  <li><strong>run_peeler()</strong> (<code>peel_util.py:20-152</code>):
+    <ul>
+      <li>Check if already done via <code>peeler_is_done()</code> (<code>peel_util.py:65-77</code>)</li>
+      <li><code>peeler.load_or_fit_and_save_models()</code> (<code>peel_util.py:83-88</code>)</li>
+      <li><code>peeler.peel()</code> &mdash; convolve templates with traces, threshold, subtract matched spikes (<code>peel_util.py:108-120</code>)</li>
+      <li>Extract residual snippets if configured (<code>peel_util.py:121-135</code>)</li>
+      <li>Run localization if configured (<code>peel_util.py:138-150</code>)</li>
+      <li>Return <code>DARTsortSorting.from_peeling_hdf5()</code></li>
+    </ul>
+  </li>
+  <li><strong>Early exit</strong> (<code>main.py:378-379</code>): If final step and <code>not cfg.final_refinement</code>, break.</li>
+  <li><strong>Recluster</strong> (<code>main.py:381-402</code>): If clustering is configured for this step, recluster and save labels.</li>
+</ol>
+
+<h4>Key Files</h4>
+<ul>
+  <li><code>main.py:334-402</code> &mdash; matching loop</li>
+  <li><code>main.py:556-655</code> &mdash; <code>match()</code> function</li>
+  <li><code>peel/matching.py</code> &mdash; <code>ObjectiveUpdateTemplateMatchingPeeler</code></li>
+  <li><code>peel_util.py:20-152</code> &mdash; <code>run_peeler()</code></li>
+  <li><code>peel/matching_util/</code> &mdash; pairwise convolution, template matching utilities</li>
+</ul>
+
+<h4>Configuration</h4>
+<table>
+  <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
+  <tr><td><code>matching_iterations</code></td><td><code>int</code></td><td>configurable</td><td>Number of matching rounds</td></tr>
+  <tr><td><code>matching_threshold</code></td><td><code>float</code></td><td><code>8.0</code></td><td>Detection threshold for matches</td></tr>
+  <tr><td><code>final_refinement</code></td><td><code>bool</code></td><td><code>True</code></td><td>Cluster after final matching step</td></tr>
+  <tr><td><code>matching_cfg.delete_pconv</code></td><td><code>bool</code></td><td><code>True</code></td><td>Delete pconv.h5 after use</td></tr>
+</table>
+
+<h4>Design Rationale</h4>
+<p>Convolution-based matching is computationally efficient on GPU using compressed template representations (<code>CompressedPairwiseConv</code>). The objective function measures residual norm reduction: a spike is "matched" if placing a template at that time/channel reduces the total residual energy. Iterating improves recall as reclustred templates better represent the true signal.</p>
+</div>
+</details>
+
+<!-- Stage 8: Refinement & Output -->
+<details id="stage-8">
+<summary>Stage 8: Refinement &amp; Output</summary>
+<div class="details-body">
+
+<div class="mermaid">
+flowchart TD
+    A["Final matching step sorting"] --> B{"work_dir used?"}
+    B -->|Yes| C["Update sorting.parent_h5_path<br/>to output_dir<br/><i>main.py:405-409</i>"]
+    B -->|No| D["No path update needed"]
+    C --> E["ds_handle_delete_intermediate_features()<br/>Remove non-final .h5 and *_models"]
+    D --> E
+    E --> F["sorting.save(dartsort_sorting.npz)<br/><i>main.py:412</i>"]
+    F --> G["Save timing JSON<br/><i>main.py:417</i>"]
+    G --> H["Return results dict<br/>{sorting, motion, timing}"]
+</div>
+
+<h4>Inputs</h4>
+<table>
+  <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>sorting</code></td><td><code>DARTsortSorting</code></td><td>Final sorting after last matching/clustering iteration</td></tr>
+</table>
+
+<h4>Outputs</h4>
+<table>
+  <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>dartsort_sorting.npz</code></td><td>file</td><td>Serialized spike train (times_samples, channels, labels)</td></tr>
+  <tr><td><code>matchingN.h5</code></td><td>file</td><td>HDF5 with all spike features</td></tr>
+  <tr><td><code>motion.pkl</code></td><td>file</td><td>Serialized MotionInfo</td></tr>
+  <tr><td><code>timing.json</code></td><td>file</td><td>Per-stage timing data</td></tr>
+</table>
+
+<h4>Algorithm</h4>
+<p>Finalization (<code>main.py:404-419</code>):</p>
+<ol>
+  <li>If tmpdir was used, patch <code>sorting.parent_h5_path</code> to point to output_dir (the tmpdir is about to be cleaned up).</li>
+  <li>Delete intermediate features if configured via <code>ds_handle_delete_intermediate_features()</code>.</li>
+  <li>Save final sorting to <code>dartsort_sorting.npz</code>.</li>
+  <li>Save timing information.</li>
+  <li>Return results dict with sorting, motion, and timing.</li>
+</ol>
+
+<h4>Export Formats</h4>
+<p><code>DARTsortSorting</code> supports multiple export formats:</p>
+<ul>
+  <li><code>.to_numpy_sorting()</code> &rarr; SpikeInterface <code>NumpySorting</code></li>
+  <li><code>.to_tsgroup()</code> &rarr; Pynapple <code>TsGroup</code></li>
+  <li><code>.to_pandas()</code> &rarr; Pandas DataFrame</li>
+  <li>Phy export via SpikeInterface bridge</li>
+</ul>
+
+<h4>Key Files</h4>
+<ul>
+  <li><code>main.py:404-419</code> &mdash; finalization logic</li>
+  <li><code>util/data_util.py</code> &mdash; <code>DARTsortSorting</code> class</li>
+  <li><code>main_util.py</code> &mdash; <code>ds_handle_delete_intermediate_features()</code></li>
+</ul>
+</div>
+</details>
+
+<!-- ============================================================ -->
+<!-- SECTION 4: Configuration Reference                            -->
+<!-- ============================================================ -->
+<section id="config">
+<h2>4. Configuration Reference</h2>
+
+<h3>User &rarr; Internal Config Mapping</h3>
+<p>Users create a <code>DARTsortUserConfig</code> (or point to a .toml file). The function <code>to_internal_config()</code> converts this to a <code>DARTsortInternalConfig</code> which controls all pipeline stages.</p>
+
+<div class="mermaid">
+flowchart LR
+    subgraph USER["DARTsortUserConfig (user-facing)"]
+      U1["preprocessing"]
+      U2["detection_type"]
+      U3["voltage_threshold"]
+      U4["matching_iterations"]
+      U5["matching_threshold"]
+      U6["do_motion_estimation"]
+      U7["work_in_tmpdir"]
+      U8["subsampling_spikes_per_channel"]
+      U9["n_jobs_gpu / device"]
+      U10["save_intermediates"]
+    end
+
+    subgraph INTERNAL["DARTsortInternalConfig"]
+      I1["preprocessing: PreprocessingStrategy"]
+      I2["initial_detection_cfg: SubtractionConfig | ThresholdingConfig | MatchingConfig"]
+      I3["waveform_cfg: WaveformConfig"]
+      I4["featurization_cfg: FeaturizationConfig"]
+      I5["motion_estimation_cfg: MotionEstimationConfig"]
+      I6["clustering_cfg: ClusteringConfig"]
+      I7["clustering_features_cfg: ClusteringFeaturesConfig"]
+      I8["pre/initial/post refinement cfgs"]
+      I9["template_cfg: TemplateConfig"]
+      I10["matching_cfg: MatchingConfig"]
+      I11["computation_cfg: ComputationConfig"]
+      I12["peeler_sampling_cfg: FitSamplingConfig"]
+    end
+
+    U1 --> I1
+    U2 --> I2
+    U3 --> I2
+    U3 --> I10
+    U4 -.-> I10
+    U5 --> I10
+    U6 --> I5
+    U7 -.-> I11
+    U8 -.-> I12
+    U9 --> I11
+    U10 -.-> I12
+</div>
+
+<h3>Reverse Mapping: InternalConfig &rarr; UserConfig</h3>
+<p>For AI agents reading code that references internal config fields:</p>
+<table>
+  <tr><th>Internal Config Field</th><th>Controlled By (UserConfig)</th></tr>
+  <tr><td><code>clustering_cfg.min_cluster_size</code></td><td>Set within <code>clustering_cfg</code> sub-config or defaults</td></tr>
+  <tr><td><code>initial_detection_cfg</code></td><td><code>detection_type</code> + <code>voltage_threshold</code> + <code>peak_sign</code></td></tr>
+  <tr><td><code>matching_cfg.matching_threshold</code></td><td><code>matching_threshold</code></td></tr>
+  <tr><td><code>computation_cfg.n_jobs_gpu</code></td><td><code>n_jobs_gpu</code></td></tr>
+  <tr><td><code>computation_cfg.device</code></td><td><code>device</code></td></tr>
+  <tr><td><code>featurization_cfg.do_localization</code></td><td><code>do_localization</code> or defaults</td></tr>
+  <tr><td><code>motion_estimation_cfg.do_motion_estimation</code></td><td><code>do_motion_estimation</code></td></tr>
+  <tr><td><code>peeler_sampling_cfg</code></td><td><code>subsampling_spikes_per_channel</code> + <code>subsampling_presence</code></td></tr>
+</table>
+
+<h3>Config Flag Interdependencies</h3>
+
+<h4>Early Exit Flags</h4>
+<table>
+  <tr><th>Flag</th><th>Effect</th><th>Code Reference</th></tr>
+  <tr><td><code>detect_only</code></td><td>Exits after Step 1 (initial detection)</td><td><code>main.py:273-275</code></td></tr>
+  <tr><td><code>dredge_only</code></td><td>Exits after motion estimation</td><td><code>main.py:296-298</code></td></tr>
+  <tr><td><code>matching_iterations == 0</code></td><td>Skips matching entirely (unusual)</td><td>Loop range becomes empty</td></tr>
+</table>
+
+<h4>Behavioral Flags</h4>
+<table>
+  <tr><th>Flag</th><th>Effect</th><th>Interactions</th></tr>
+  <tr><td><code>final_refinement</code></td><td>Whether to cluster after the final matching step</td><td>Controls early exit at <code>main.py:378-379</code></td></tr>
+  <tr><td><code>recluster_after_first_matching</code></td><td>Run clustering after matching step 1</td><td>Interacts with <code>_matching_step_cfgs()</code></td></tr>
+  <tr><td><code>is_subsampling</code></td><td>Computed from <code>subsampling_spikes_per_channel</code> + <code>subsampling_presence != 1.0</code></td><td>Affects <code>_matching_step_cfgs()</code> output: final+subsampling+TMM &rarr; 1 refinement pass</td></tr>
+</table>
+
+<h4>Resume Flags</h4>
+<table>
+  <tr><th>Flag</th><th>Effect</th><th>Description</th></tr>
+  <tr><td><code>link_from</code></td><td>Resume from benchmark directory</td><td>Symlinks files from another output directory</td></tr>
+  <tr><td><code>link_step</code></td><td>Which step to link from</td><td>Used with <code>link_from</code> for benchmarking</td></tr>
+  <tr><td><code>save_intermediate_labels</code></td><td>Save <code>refined{N}_labels.npy</code> at each step</td><td>Enables finer-grained checkpoint resume</td></tr>
+  <tr><td><code>save_intermediate_features</code></td><td>Save .h5 files at each step</td><td>Preserves intermediate feature data</td></tr>
+</table>
+
+<h4>Performance Flags</h4>
+<table>
+  <tr><th>Flag</th><th>Effect</th><th>Description</th></tr>
+  <tr><td><code>work_in_tmpdir</code></td><td>Use scratch directory (<code>main.py:135-180</code>)</td><td>Avoids network filesystem overhead</td></tr>
+  <tr><td><code>subsampling_spikes_per_channel</code></td><td>Subsample for speed</td><td>Limits spike count per channel in non-final steps</td></tr>
+  <tr><td><code>subsampling_presence</code></td><td>Coverage requirement when subsampling</td><td>Default <code>1.0</code> means full coverage</td></tr>
+  <tr><td><code>chunk_length_samples</code></td><td>Processing chunk size</td><td>Controls memory usage vs. overhead tradeoff</td></tr>
+</table>
+
+<h4>Output Flags</h4>
+<table>
+  <tr><th>Flag</th><th>Effect</th><th>Description</th></tr>
+  <tr><td><code>save_everything_on_error</code></td><td>Copy tmpdir contents on crash</td><td>Debugging aid (<code>main.py:168-179</code>)</td></tr>
+</table>
+</section>
+
+<!-- ============================================================ -->
+<!-- SECTION 5: Data Flow & Storage                                -->
+<!-- ============================================================ -->
+<section id="dataflow">
+<h2>5. Data Flow &amp; Storage</h2>
+
+<h3>HDF5 File Structure</h3>
+<div class="mermaid">
+flowchart TD
+    subgraph OUTPUT["Output Directory"]
+      A["dartsort_sorting.npz<br/>(final spike train)"]
+      B["subtraction.h5<br/>(initial detection)"]
+      C["matching1.h5"]
+      D["matching2.h5"]
+      E["matchingN.h5<br/>(final matching)"]
+      F["motion.pkl"]
+      G["timing.json"]
+      H["_dartsort_internal_config.json"]
+    end
+
+    subgraph HDF5["HDF5 Contents (matchingN.h5)"]
+      H1["/times_samples"]
+      H2["/channels"]
+      H3["/labels"]
+      H4["/point_source_localizations"]
+      H5["/collisioncleaned_waveforms"]
+      H6["/features_pca"]
+      H7["/amplitudes"]
+    end
+
+    subgraph LABELS["Label Files (if save_intermediate_labels)"]
+      L1["refined0_labels.npy"]
+      L2["refined1_labels.npy"]
+      L3["refinedN_labels.npy"]
+    end
+
+    subgraph MODELS["Model Directories"]
+      M1["subtraction_models/"]
+      M2["matching1_models/<br/>template_data.npz"]
+      M3["matchingN_models/"]
+    end
+
+    E --> HDF5
+</div>
+
+<h3>DARTsortSorting Class</h3>
+<p>The core data structure (<code>util/data_util.py</code>) holds:</p>
+<table>
+  <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>times_samples</code></td><td><code>int64[n_spikes]</code></td><td>Spike times in samples</td></tr>
+  <tr><td><code>channels</code></td><td><code>int32[n_spikes]</code></td><td>Max channel per spike</td></tr>
+  <tr><td><code>labels</code></td><td><code>int32[n_spikes] | None</code></td><td>Unit assignments (None before clustering)</td></tr>
+  <tr><td><code>parent_h5_path</code></td><td><code>Path</code></td><td>Path to HDF5 with features</td></tr>
+</table>
+
+<p>Features are lazily loaded from HDF5 on access: <code>point_source_localizations</code>, <code>amplitudes</code>, <code>collisioncleaned_waveforms</code>, etc.</p>
+
+<h4>Nested Type Graph</h4>
+<ul>
+  <li><code>DARTsortSorting</code> &rarr; lazy-loads from HDF5</li>
+  <li><code>TemplateData</code> &rarr; contains <code>LowRankTemplates</code> and <code>CompressedUpsampledTemplates</code></li>
+  <li><code>DARTsortInternalConfig</code> &rarr; 6+ levels of nested config dataclasses</li>
+</ul>
+
+<h3>Intermediate Output Lifecycle</h3>
+<ol>
+  <li><strong>Created during pipeline:</strong> <code>subtraction.h5</code>, <code>matching{N}.h5</code>, <code>refined{N}_labels.npy</code>, <code>*_models/</code> directories</li>
+  <li><strong>Kept after pipeline:</strong> Only the final <code>matchingN.h5</code> and <code>dartsort_sorting.npz</code> (unless <code>save_intermediate_features</code> is set)</li>
+  <li><strong>Deleted by:</strong> <code>ds_handle_delete_intermediate_features()</code> (<code>main.py:410</code>)</li>
+</ol>
+</section>
+
+<!-- ============================================================ -->
+<!-- SECTION 5b: Checkpoint/Resume Logic                           -->
+<!-- ============================================================ -->
+<section id="checkpoint">
+<h2>5b. Checkpoint/Resume Logic</h2>
+
+<h3><code>ds_fast_forward()</code> Algorithm</h3>
+<p>This function determines where pipeline execution should resume. Reference: <code>main_util.py</code>, invoked at <code>main.py:226</code>.</p>
+
+<div class="mermaid">
+flowchart TD
+    A["ds_fast_forward(store_dir, cfg)"] --> B{"subtraction.h5<br/>exists?"}
+    B -->|No| C["Return (0, None, None)<br/>Start fresh"]
+    B -->|Yes| D["Count matching*.h5 files<br/>→ completed step count"]
+    D --> E{"motion.pkl<br/>exists?"}
+    E -->|Yes| F["Load motion"]
+    E -->|No| G["motion = None"]
+    F --> H{"save_intermediate_labels?"}
+    G --> H
+    H -->|Yes| I{"refined{step}_labels.npy<br/>exists?"}
+    I -->|Yes| J["Load labels<br/>Return (step+1, sorting, motion)<br/>Resume at NEXT step"]
+    I -->|No| K["Look for refined{step-1}_labels.npy<br/>+ matching{step-1}.h5"]
+    K --> L["Return (step, prev_sorting, motion)<br/>RE-RUN current step"]
+    H -->|No| K
+</div>
+
+<h4>Algorithm Steps</h4>
+<ol>
+  <li>Look for <code>subtraction.h5</code> &mdash; if missing, return <code>(0, None, None)</code> (start fresh).</li>
+  <li>Look for <code>matching*.h5</code> files &mdash; file count determines completed step number.</li>
+  <li>Load motion from <code>motion.pkl</code> if it exists.</li>
+  <li>If <code>cfg.save_intermediate_labels</code>:
+    <ul>
+      <li>Look for <code>refined{step}_labels.npy</code></li>
+      <li>If found, load labels and return <code>(step + 1, sorting_with_labels, motion)</code> &mdash; resume at NEXT step</li>
+    </ul>
+  </li>
+  <li>Otherwise:
+    <ul>
+      <li>Look for <code>refined{step-1}_labels.npy</code> and <code>matching{step-1}.h5</code></li>
+      <li>Return <code>(step, previous_sorting, motion)</code> &mdash; RE-RUN current step</li>
+    </ul>
+  </li>
+</ol>
+
+<div class="invariant-box">
+  <strong>Critical invariant:</strong> Without <code>save_intermediate_labels=True</code>, fast-forward can only resume at matching steps, not after clustering. A crash during clustering without intermediate labels forces re-running from the last matching step.
+</div>
+</section>
+
+<!-- ============================================================ -->
+<!-- SECTION 6: Design Patterns                                    -->
+<!-- ============================================================ -->
+<section id="patterns">
+<h2>6. Design Patterns</h2>
+
+<h3>1. Peeler Pattern</h3>
+<p>All detection methods inherit from a base peeler interface:</p>
+<pre><code>class BasePeeler:
+    def peel(self, traces, ...) -&gt; detections
+    def load_or_fit_and_save_models(self, ...)
+    @classmethod
+    def from_config(cls, ...) -&gt; Self</code></pre>
+<p>Implementations: <code>Threshold</code>, <code>SubtractionPeeler</code>, <code>ObjectiveUpdateTemplateMatchingPeeler</code>. All are orchestrated through <code>run_peeler()</code> (<code>peel_util.py:20-152</code>), which handles model loading, chunked processing, feature extraction, and HDF5 output.</p>
+
+<h3>2. Transformer Pipeline</h3>
+<p><code>WaveformPipeline</code> (<code>transform/pipeline.py</code>) chains transformers, each with <code>.fit()</code>, <code>.transform()</code>, and <code>.fit_transform()</code> methods:</p>
+<pre><code>pipeline = WaveformPipeline([
+    Whitener(...),
+    TemporalPCA(...),
+    AmortizedLocalization(...),
+    DimensionalityReduction(...)
+])
+transformed = pipeline.transform(waveforms)</code></pre>
+<p>Each transformer inherits from <code>transform_base.py</code>. New transforms can be added by implementing the interface and adding to the pipeline list.</p>
+
+<h3>3. HDF5 Lazy Loading</h3>
+<p><code>DARTsortSorting</code> lazily loads features from HDF5 when accessed:</p>
+<pre><code># Features not loaded until accessed
+sorting = DARTsortSorting.from_peeling_hdf5("matching1.h5")
+# First access triggers HDF5 read
+locs = sorting.point_source_localizations  # lazy load</code></pre>
+<p>This keeps memory usage low &mdash; only the requested features are loaded.</p>
+
+<h3>4. Config Dataclass Hierarchy</h3>
+<p>All configuration via dataclasses with type checking, default values, serialization to TOML/JSON, and validation:</p>
+<pre><code>DARTsortUserConfig (user-facing, high-level)
+  ↓ to_internal_config()
+DARTsortInternalConfig
+  ├── preprocessing: PreprocessingStrategy
+  ├── waveform_cfg: WaveformConfig
+  ├── featurization_cfg: FeaturizationConfig
+  ├── initial_detection_cfg: SubtractionConfig | ...
+  ├── clustering_cfg: ClusteringConfig
+  ├── template_cfg: TemplateConfig
+  ├── matching_cfg: MatchingConfig
+  ├── computation_cfg: ComputationConfig
+  └── ... (12+ sub-configs)</code></pre>
+
+<h3>5. Motion-Aware Processing</h3>
+<p>Many operations accept a <code>motion</code> parameter that adjusts spatial coordinates based on drift:</p>
+<pre><code>localize_spikes(waveforms, geom, motion=motion_info)
+cluster(sorting, motion=motion, ...)
+match(sorting, motion=motion, ...)</code></pre>
+<p>Motion is carried through the entire pipeline after estimation. All feature extraction, clustering, and template operations can correct for drift.</p>
+</section>
+
+<!-- ============================================================ -->
+<!-- SECTION 7: Control Flow Decisions                             -->
+<!-- ============================================================ -->
+<section id="controlflow">
+<h2>7. Control Flow Decisions</h2>
+
+<h3>Master Decision-Point Flowchart</h3>
+<p>All conditional branches in <code>_dartsort_impl()</code> (<code>main.py:204-419</code>):</p>
+
+<div class="mermaid">
+flowchart TD
+    START["_dartsort_impl() entry<br/><i>main.py:204</i>"] --> FF["ds_fast_forward()<br/><i>main.py:226</i>"]
+    FF --> NS{"next_step == 0?"}
+
+    NS -->|"Yes (fresh start)"| DET["Initial detection<br/><i>main.py:258-268</i>"]
+    NS -->|"No (resuming)"| MOTION_RESUME["Resolve motion<br/>(4 paths)<br/><i>main.py:227-252</i>"]
+    MOTION_RESUME --> LOOP_ENTRY
+
+    DET --> DO{"cfg.detect_only?<br/><i>main.py:273</i>"}
+    DO -->|Yes| EXIT1["Return sorting<br/>(early exit)"]
+    DO -->|No| ME["Motion estimation<br/><i>main.py:277-294</i>"]
+    ME --> MN{"motion is None?"}
+    MN -->|Yes| ESTIMATE["get_motion_info()<br/>estimate via DREDge"]
+    MN -->|No| USE_PROVIDED["Use provided motion"]
+    ESTIMATE --> DRO
+    USE_PROVIDED --> DRO
+
+    DRO{"cfg.dredge_only?<br/><i>main.py:296</i>"}
+    DRO -->|Yes| EXIT2["Return sorting<br/>(early exit)"]
+    DRO -->|No| CLUST0["Initial clustering<br/><i>main.py:300-328</i>"]
+    CLUST0 --> LOOP_ENTRY["Enter matching loop"]
+
+    subgraph MATCHING_LOOP["for step in range(next_step, matching_iterations+1)"]
+      LOOP_ENTRY --> MATCH["match()<br/><i>main.py:353-376</i>"]
+      MATCH --> FINAL{"is_final AND<br/>NOT final_refinement?<br/><i>main.py:378</i>"}
+      FINAL -->|Yes| BREAK["Break loop"]
+      FINAL -->|No| CLUS_CHK{"step_clus_cfg OR<br/>step_ref_cfgs?<br/><i>main.py:382</i>"}
+      CLUS_CHK -->|Yes| RECLUST["cluster()<br/><i>main.py:383-395</i>"]
+      CLUS_CHK -->|No| SKIP_CLUST["Skip clustering"]
+      RECLUST --> SAVE_LABELS["Save refined{step}_labels.npy"]
+      SKIP_CLUST --> SAVE_LABELS
+      SAVE_LABELS -->|"next step"| MATCH
+    end
+
+    BREAK --> FINALIZE["Finalization<br/><i>main.py:404-419</i>"]
+    SAVE_LABELS -->|"loop end"| FINALIZE
+</div>
+
+<h3>Workflow Sequences</h3>
+
+<h4>Full Pipeline Execution (Normal Path)</h4>
+<ol>
+  <li>Config conversion: <code>to_internal_config()</code></li>
+  <li>Preprocessing: <code>preprocess()</code> (<code>main.py:133</code>)</li>
+  <li>Optional tmpdir setup (<code>main.py:135-146</code>)</li>
+  <li>Fast-forward check: <code>ds_fast_forward()</code> &rarr; <code>next_step=0</code></li>
+  <li>Initial detection: <code>initial_detection()</code> (<code>main.py:258-268</code>)</li>
+  <li>Motion estimation: <code>get_motion_info()</code> (<code>main.py:277-294</code>)</li>
+  <li>Initial clustering: <code>cluster()</code> (<code>main.py:300-328</code>)</li>
+  <li>Matching loop (steps 1..N): match &rarr; recluster &rarr; repeat</li>
+  <li>Finalization: save sorting, cleanup (<code>main.py:404-419</code>)</li>
+</ol>
+
+<h4>Resume-from-Checkpoint Sequence</h4>
+<ol>
+  <li><code>ds_fast_forward()</code> finds existing files &rarr; <code>next_step=N</code></li>
+  <li>Motion resolution from 4 paths (<code>main.py:227-252</code>)</li>
+  <li>Skip to matching loop at step N</li>
+  <li>Continue from there normally</li>
+</ol>
+
+<h4>Subsampling Workflow</h4>
+<ol>
+  <li><code>is_subsampling</code> computed from <code>subsampling_spikes_per_channel</code> + <code>subsampling_presence</code> (<code>main.py:255-256</code>)</li>
+  <li>Non-final steps: <code>stop_after_n_spikes = spk_per_chan * n_channels</code>, <code>ensure_coverage = subsampling_presence</code></li>
+  <li>Final step: always full coverage (<code>_nspk=None</code>, <code>_pres=1.0</code>)</li>
+  <li><code>_matching_step_cfgs()</code> adjusts refinement: final+subsampling+TMM &rarr; single agglomerate pass</li>
+</ol>
+
+<h4>Motion Estimation Bypass (User-Provided Motion)</h4>
+<ol>
+  <li>User passes <code>motion=MotionInfo(...)</code> to <code>dartsort()</code></li>
+  <li><code>_dartsort_impl()</code> receives it, sets <code>motion</code> directly (<code>main.py:227-228</code>)</li>
+  <li>Internal estimation via <code>get_motion_info()</code> is skipped entirely</li>
+  <li><code>ds_save_motion()</code> still saves the provided motion to disk (<code>main.py:294</code>)</li>
+</ol>
+
+<h3>Error Handling Paths</h3>
+
+<h4>Error Trapping with Traceback Saving</h4>
+<p>Both tmpdir and non-tmpdir paths wrap <code>_dartsort_impl()</code> in try/except (<code>main.py:151-180</code> and <code>main.py:184-201</code>):</p>
+<ol>
+  <li>On exception: write traceback to <code>output_dir/traceback.txt</code></li>
+  <li>If <code>cfg.save_everything_on_error</code> and using tmpdir: copy entire tmpdir contents to <code>output_dir/error_state/</code></li>
+  <li>If not saving: log warning that files won't be kept</li>
+  <li>Re-raise the exception</li>
+</ol>
+
+<h4>Tmpdir Cleanup</h4>
+<ul>
+  <li><strong>On success:</strong> Files are already copied to <code>output_dir</code> during pipeline. Tmpdir is cleaned up by <code>TemporaryDirectory</code> context manager.</li>
+  <li><strong>On error without <code>save_everything_on_error</code>:</strong> Tmpdir is cleaned up, all intermediate data is lost.</li>
+  <li><strong>On error with <code>save_everything_on_error</code>:</strong> Tmpdir contents copied to <code>error_state/</code> before cleanup.</li>
+</ul>
+</section>
+
+<!-- ============================================================ -->
+<!-- SECTION 8: AI Guidance                                        -->
+<!-- ============================================================ -->
+<section id="ai-guidance">
+<h2>8. AI Guidance</h2>
+
+<h3>Canonical Terminology Glossary</h3>
+<table>
+  <tr><th>Term</th><th>Definition</th></tr>
+  <tr><td><strong>spike</strong></td><td>A single detected extracellular voltage deflection from a neuron firing. Identified by a time (in samples) and a channel (max amplitude).</td></tr>
+  <tr><td><strong>unit</strong></td><td>A cluster of spikes attributed to the same neuron. Identified by an integer label.</td></tr>
+  <tr><td><strong>template</strong></td><td>The mean waveform of a unit across channels. Used as a spatial-temporal fingerprint for matching.</td></tr>
+  <tr><td><strong>peeler</strong></td><td>A detection method that "peels" spikes from traces. Implements <code>peel()</code> to detect and optionally subtract matched spikes.</td></tr>
+  <tr><td><strong>waveform</strong></td><td>A voltage snippet extracted around a detected spike peak. Shape: <code>[n_time, n_channels]</code>.</td></tr>
+  <tr><td><strong>cluster</strong></td><td>A group of spikes with similar features, representing a putative unit. Produced by GMM or other clustering algorithms.</td></tr>
+  <tr><td><strong>drift / motion</strong></td><td>Physical displacement of the recording probe relative to the brain over time. Tracked as vertical displacement per time bin.</td></tr>
+  <tr><td><strong>residual</strong></td><td>The recording trace after subtracting all matched templates. Used for iterative detection of remaining spikes.</td></tr>
+  <tr><td><strong>sorting</strong></td><td>A <code>DARTsortSorting</code> object holding spike times, channels, labels, and a reference to HDF5 features.</td></tr>
+  <tr><td><strong>matching iteration</strong></td><td>One cycle of template estimation &rarr; template matching &rarr; reclustering in the matching loop.</td></tr>
+  <tr><td><strong>refinement pass</strong></td><td>A split/merge operation applied to clusters to improve unit separation. Multiple passes run in sequence.</td></tr>
+  <tr><td><strong>TSVD</strong></td><td>Truncated SVD. Used to compress templates for efficient storage and matching.</td></tr>
+  <tr><td><strong>PTP</strong></td><td>Peak-to-peak amplitude. The difference between max and min voltage in a waveform.</td></tr>
+  <tr><td><strong>SNR</strong></td><td>Signal-to-noise ratio. Template amplitude relative to noise standard deviation.</td></tr>
+  <tr><td><strong>DREDge</strong></td><td>External library for decentralized registration and estimation of drift in electrophysiology.</td></tr>
+</table>
+
+<h3>Module Dependency Map</h3>
+<div class="mermaid">
+flowchart LR
+    MAIN["main.py"] --> PEEL["peel/"]
+    MAIN --> CLUST["clustering/"]
+    MAIN --> TEMPL["templates/"]
+    MAIN --> UTIL["util/"]
+    MAIN --> CONFIG["config.py"]
+
+    PEEL --> TRANSFORM["transform/"]
+    PEEL --> DETECT["detect/"]
+    PEEL --> UTIL
+
+    CLUST --> TRANSFORM
+    CLUST --> UTIL
+
+    TEMPL --> TRANSFORM
+    TEMPL --> UTIL
+
+    TRANSFORM --> LOCALIZE["localize/"]
+    TRANSFORM --> UTIL
+
+    UTIL --> CONFIG
+
+    subgraph EXTERNAL["External"]
+      SI["spikeinterface"]
+      DREDGE["dredge"]
+      TORCH["torch"]
+      H5PY["h5py"]
+    end
+
+    MAIN --> SI
+    UTIL --> DREDGE
+    PEEL --> TORCH
+    CLUST --> TORCH
+    UTIL --> H5PY
+</div>
+
+<h3>Refactoring Targets</h3>
+<p>Identified from codebase analysis:</p>
+<ul>
+  <li><strong>Uninstrumented modules</strong> (0 log statements):
+    <ul>
+      <li><code>peel/peel_lib.py</code> (9 functions)</li>
+      <li><code>clustering/clustering.py</code> (30 functions)</li>
+      <li><code>peel/subtract.py</code> (12 functions)</li>
+      <li><code>peel/grab.py</code> (5 functions)</li>
+      <li><code>localize/localize_torch.py</code> (6 functions)</li>
+    </ul>
+  </li>
+  <li><strong>Complex config hierarchy:</strong> User &rarr; Internal config conversion is opaque. 12+ sub-configs with 6+ levels of nesting.</li>
+  <li><strong>Documentation gaps:</strong> No high-level architecture diagram in repo (this document fills that gap).</li>
+  <li><strong>Error messages:</strong> Many internal exceptions could be more user-friendly.</li>
+</ul>
+
+<h3>Known Limitations</h3>
+<ul>
+  <li>Motion estimation assumes primarily vertical drift; complex 3D motion patterns are not modeled.</li>
+  <li>Neural-net localization is trained on simulated data; accuracy may vary for non-standard probe geometries.</li>
+  <li>Checkpoint resume without <code>save_intermediate_labels</code> can only resume at matching steps, not mid-clustering.</li>
+  <li>Template matching threshold is global; per-unit adaptive thresholds are not supported.</li>
+</ul>
+</section>
+
+<!-- ============================================================ -->
+<!-- SECTION 8b: Design Invariants                                 -->
+<!-- ============================================================ -->
+<section id="invariants">
+<h2>8b. Design Invariants</h2>
+<p>These constraints <strong>must be preserved</strong> in any refactoring. Violating them will produce incorrect results or break the pipeline.</p>
+
+<div class="invariant-box">
+  <strong>1. Resume semantics:</strong> Without <code>save_intermediate_labels=True</code>, fast-forward can only resume at matching steps, not after clustering. Any refactor that changes the matching loop iteration structure must preserve the file-naming convention (<code>matching{N}.h5</code>, <code>refined{N}_labels.npy</code>) or update <code>ds_fast_forward()</code> accordingly.
+</div>
+
+<div class="invariant-box">
+  <strong>2. Motion before clustering:</strong> Motion estimation must complete before clustering &mdash; spatial correction is required before feature extraction. Moving clustering before motion estimation will produce incorrect results.
+</div>
+
+<div class="invariant-box">
+  <strong>3. SVD compression before matching:</strong> Templates must be SVD-compressed before template matching. This is a memory/performance invariant. The matching peeler (<code>ObjectiveUpdateTemplateMatchingPeeler</code>) expects <code>LowRankTemplates</code>.
+</div>
+
+<div class="invariant-box">
+  <strong>4. Refinement config ordering:</strong> <code>pre_refinement_cfg</code> &rarr; <code>initial_refinement_cfg</code> &rarr; <code>post_refinement_cfgs</code> must execute in this order. The pre-refinement prepares data for initial refinement, and post-refinement(s) clean up afterward. Reference: <code>main.py:301-305</code>.
+</div>
+
+<div class="invariant-box">
+  <strong>5. Peeler lifecycle:</strong> <code>load_or_fit_and_save_models()</code> must be called before <code>peel()</code>. Models are lazily loaded/fitted on first use, then cached to disk for resume. Reference: <code>peel_util.py:83-88</code>.
+</div>
+
+<div class="invariant-box">
+  <strong>6. HDF5 path consistency:</strong> <code>sorting.parent_h5_path</code> must point to the correct output directory after tmpdir cleanup. The finalization step (<code>main.py:405-409</code>) patches this path. Breaking this causes feature access to fail after pipeline completion.
+</div>
+
+<div class="invariant-box">
+  <strong>7. Config immutability during execution:</strong> <code>DARTsortInternalConfig</code> is frozen after <code>to_internal_config()</code> converts the user config. Internal config fields should not be mutated during pipeline execution.
+</div>
+
+<div class="invariant-box">
+  <strong>8. Label file naming convention:</strong> <code>refined{N}_labels.npy</code> where N corresponds to the matching step index. Breaking this convention breaks <code>ds_fast_forward()</code>. Reference: <code>main.py:319-325</code> and <code>main.py:396-402</code>.
+</div>
+</section>
+
+</main>
+
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default',
+  flowchart: { useMaxWidth: true, htmlLabels: true },
+  sequence: { useMaxWidth: true }
+});
+</script>
+</body>
+</html>
