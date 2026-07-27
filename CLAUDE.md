@@ -15,7 +15,7 @@ This documents:
 - Checkpoint/resume logic (`ds_fast_forward`)
 - Clustering algorithms, template estimation, and matching
 
-**Read this before modifying core pipeline code. Verify against source for current truth.**
+**Read this before modifying core pipeline code.**
 
 ## Key Entry Points
 

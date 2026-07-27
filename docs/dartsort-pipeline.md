@@ -9,8 +9,7 @@ AI AGENTS: DartSort pipeline documentation.
 
 BASELINE SNAPSHOT: This document was generated on 2026-07-27 from the codebase
 at that time. It provides foundational understanding but may drift as code evolves.
-Always verify against actual source code for current truth. When docs feel stale,
-regenerate via a factory design cycle.
+Always verify against actual source code for current truth.
 -->
 
 # DartSort Pipeline Reference
