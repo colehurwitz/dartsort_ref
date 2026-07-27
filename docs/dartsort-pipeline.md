@@ -6,9 +6,16 @@ AI AGENTS: DartSort pipeline documentation.
 - Section 5: Data flow, HDF5 storage, and checkpoint/resume logic
 - Section 7: Control flow decisions — all conditional branches
 - Section 8: AI guidance — invariants, glossary, refactoring targets
+
+BASELINE SNAPSHOT: This document was generated on 2026-07-27 from the codebase
+at that time. It provides foundational understanding but may drift as code evolves.
+Always verify against actual source code for current truth. When docs feel stale,
+regenerate via a factory design cycle.
 -->
 
 # DartSort Pipeline Reference
+
+> **BASELINE SNAPSHOT (2026-07-27):** This document provides foundational architectural understanding. Code evolves — always verify against actual source files for current behavior.
 
 *Motion-aware spike sorting — architecture & internals*
 

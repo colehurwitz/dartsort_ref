@@ -6,6 +6,8 @@ Motion-aware spike sorting for extracellular electrophysiology.
 
 **For detailed pipeline architecture, see `docs/dartsort-pipeline.md`.**
 
+> **BASELINE SNAPSHOT (2026-07-27):** The pipeline docs provide foundational understanding but may drift as code evolves. Always verify against actual source files for current behavior.
+
 This documents:
 - All 7 pipeline stages with data flow diagrams
 - Configuration flags and their effects (27+ flags with interdependencies)
@@ -13,7 +15,7 @@ This documents:
 - Checkpoint/resume logic (`ds_fast_forward`)
 - Clustering algorithms, template estimation, and matching
 
-**Read this before modifying core pipeline code.**
+**Read this before modifying core pipeline code. Verify against source for current truth.**
 
 ## Key Entry Points
 
