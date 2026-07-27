@@ -1,7 +1,7 @@
 <!-- llms.txt
 AI AGENTS: DartSort pipeline documentation.
 - Section 2: Full pipeline overview with decision-point flowchart
-- Section 3.X: Individual stage reference (8 stages)
+- Section 3.X: Individual stage reference (7 stages + embedded featurization)
 - Section 4: Configuration reference with bidirectional mapping
 - Section 5: Data flow, HDF5 storage, and checkpoint/resume logic
 - Section 7: Control flow decisions — all conditional branches
@@ -239,11 +239,11 @@ th { background: var(--bg-alt); font-weight: 600; }
   <a href="#stage-1">1. Preprocessing</a>
   <a href="#stage-2">2. Detection</a>
   <a href="#stage-3">3. Motion Estimation</a>
-  <a href="#stage-4">4. Featurization</a>
-  <a href="#stage-5">5. Clustering</a>
-  <a href="#stage-6">6. Template Estimation</a>
-  <a href="#stage-7">7. Template Matching</a>
-  <a href="#stage-8">8. Refinement &amp; Output</a>
+  <a href="#stage-4">4. Clustering</a>
+  <a href="#stage-5">5. Template Estimation</a>
+  <a href="#stage-6">6. Template Matching</a>
+  <a href="#stage-7">7. Refinement &amp; Output</a>
+  <a href="#featurization">Featurization (embedded)</a>
 
   <div class="nav-group">Reference</div>
   <a href="#config">4. Configuration</a>
@@ -290,19 +290,18 @@ flowchart TD
     E{"dredge_only?"}
     E -->|Yes| EXIT2["Return sorting"]
     E -->|No| F
-    F["<b>4. Featurization</b><br/>PCA + Localization<br/><i>transform/pipeline.py</i>"] --> G
-    G["<b>5. Initial Clustering</b><br/>GMM + refinement passes<br/><i>main.py:300-328</i>"] --> H
+    F["<b>4. Initial Clustering</b><br/>GMM + refinement passes<br/><i>main.py:300-328</i>"] --> H
 
     subgraph LOOP["Matching Loop (steps 1..N)"]
-      H["<b>6. Template Estimation</b><br/>Realign → SVD → estimate<br/><i>templates/postprocess_util.py</i>"] --> I
-      I["<b>7. Template Matching</b><br/>Convolution-based peeler<br/><i>main.py:353-376</i>"] --> J
+      H["<b>5. Template Estimation</b><br/>Realign → SVD → estimate<br/><i>templates/postprocess_util.py</i>"] --> I
+      I["<b>6. Template Matching</b><br/>Convolution-based peeler<br/><i>main.py:353-376</i>"] --> J
       J{"final &amp; !final_refinement?"}
       J -->|Yes| K["Break loop"]
       J -->|No| L["<b>Recluster</b><br/><i>main.py:381-402</i>"]
       L --> H
     end
 
-    K --> M["<b>8. Finalization</b><br/>Save sorting, cleanup<br/><i>main.py:404-419</i>"]
+    K --> M["<b>7. Finalization</b><br/>Save sorting, cleanup<br/><i>main.py:404-419</i>"]
     L -.->|"last iteration"| M
 </div>
 
@@ -377,7 +376,7 @@ flowchart TD
     A["Preprocessed traces"] --> B{"detection_type?"}
     B -->|"threshold"| C["Threshold detection<br/><code>threshold()</code><br/><i>main.py:694-740</i>"]
     B -->|"subtract"| D["Subtraction peeler<br/><code>subtract()</code><br/><i>main.py:505-553</i>"]
-    B -->|"match"| E["Template matching<br/><code>match()</code><br/><i>main.py:556-655</i>"]
+    B -->|"match"| E["Template matching<br/><code>match()</code><br/><i>main.py:556-656</i>"]
     C --> F["detect_and_deduplicate()"]
     D --> G["SubtractionPeeler.from_config()"]
     E --> H["ObjectiveUpdateTMPeeler"]
@@ -406,7 +405,7 @@ flowchart TD
 <ol>
   <li><strong>Threshold</strong> (<code>main.py:694-740</code>): Simple amplitude-based peak detection with temporal/spatial deduplication. Creates a <code>Threshold</code> peeler.</li>
   <li><strong>Subtraction</strong> (<code>main.py:505-553</code>): Iteratively detects and subtracts spikes from the residual. Creates a <code>SubtractionPeeler</code>. Supports <code>fit_only</code> mode.</li>
-  <li><strong>Template matching</strong> (<code>main.py:556-655</code>): Matches against a template library (requires precomputed templates or a prior sorting). Creates an <code>ObjectiveUpdateTemplateMatchingPeeler</code>.</li>
+  <li><strong>Template matching</strong> (<code>main.py:556-656</code>): Matches against a template library (requires precomputed templates or a prior sorting). Creates an <code>ObjectiveUpdateTemplateMatchingPeeler</code>.</li>
 </ol>
 
 <h4>Key Files</h4>
@@ -515,67 +514,9 @@ flowchart TD
 </div>
 </details>
 
-<!-- Stage 4: Featurization -->
+<!-- Stage 4: Clustering -->
 <details id="stage-4">
-<summary>Stage 4: Featurization &amp; Localization</summary>
-<div class="details-body">
-
-<div class="mermaid">
-flowchart LR
-    A["Raw waveforms<br/>(n_spikes, n_time, n_channels)"] --> B["Whitening<br/><i>whiten.py</i>"]
-    B --> C["Temporal PCA<br/><i>temporal_pca.py</i>"]
-    C --> D["Localization NN<br/><i>amortized_localization.py</i>"]
-    D --> E["Denoising<br/><i>supervised_denoiser.py</i>"]
-    E --> F["Dimensionality reduction<br/><i>reduction.py</i>"]
-    F --> G["Amplitude estimation<br/><i>amplitudes.py</i>"]
-    G --> H["Feature vectors<br/>stored in HDF5"]
-</div>
-
-<h4>Inputs</h4>
-<table>
-  <tr><th>Name</th><th>Type</th><th>Description</th></tr>
-  <tr><td><code>waveforms</code></td><td><code>float32[n_spikes, n_time, n_channels]</code></td><td>Raw waveform snippets around detected peaks</td></tr>
-  <tr><td><code>motion</code></td><td><code>MotionInfo</code></td><td>Drift correction for spatial features</td></tr>
-</table>
-
-<h4>Outputs</h4>
-<table>
-  <tr><th>Name</th><th>Type</th><th>Description</th></tr>
-  <tr><td><code>point_source_localizations</code></td><td><code>float32[n_spikes, 4]</code></td><td>(x, y, z, alpha) spike positions</td></tr>
-  <tr><td><code>collisioncleaned_waveforms</code></td><td><code>float32[n_spikes, n_time, n_channels]</code></td><td>Denoised waveforms</td></tr>
-  <tr><td><code>features_pca</code></td><td><code>float32[n_spikes, n_components]</code></td><td>PCA-reduced features for clustering</td></tr>
-</table>
-
-<h4>Algorithm</h4>
-<p>Featurization is a composable <code>WaveformPipeline</code> of transformers, each with <code>.fit()</code>, <code>.transform()</code>, and <code>.fit_transform()</code> methods. The pipeline chains: whitening (decorrelate channels via noise covariance) &rarr; temporal PCA (reduce time dimension, e.g. 121 timepoints &rarr; 20 PCs) &rarr; neural-net localization (pretrained on simulated data, predicts x/y/z/alpha) &rarr; denoising &rarr; dimensionality reduction &rarr; amplitude estimation.</p>
-
-<h4>Key Files</h4>
-<ul>
-  <li><code>transform/pipeline.py</code> &mdash; <code>WaveformPipeline</code> orchestrator</li>
-  <li><code>transform/amortized_localization.py</code> &mdash; <code>AmortizedLocalization</code> neural net</li>
-  <li><code>transform/temporal_pca.py</code> &mdash; <code>TemporalPCA</code></li>
-  <li><code>transform/whiten.py</code> &mdash; <code>Whitener</code></li>
-  <li><code>transform/supervised_denoiser.py</code> &mdash; supervised denoising</li>
-  <li><code>transform/reduction.py</code> &mdash; dimensionality reduction</li>
-  <li><code>transform/amplitudes.py</code> &mdash; amplitude estimation</li>
-</ul>
-
-<h4>Configuration</h4>
-<table>
-  <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
-  <tr><td><code>featurization_cfg.do_localization</code></td><td><code>bool</code></td><td><code>True</code></td><td>Run localization neural net</td></tr>
-  <tr><td><code>featurization_cfg.tpca_from_templates</code></td><td><code>bool</code></td><td><code>False</code></td><td>Fit TPCA basis from templates instead of data</td></tr>
-  <tr><td><code>featurization_cfg.denoise_only</code></td><td><code>bool</code></td><td><code>False</code></td><td>Skip localization, only denoise</td></tr>
-</table>
-
-<h4>Design Rationale</h4>
-<p>Neural-net localization over analytical methods: the pretrained NN is faster and more robust across probe geometries than point-source model fitting. The pipeline pattern allows each transform to be independently configured, swapped, or disabled.</p>
-</div>
-</details>
-
-<!-- Stage 5: Clustering -->
-<details id="stage-5">
-<summary>Stage 5: Clustering</summary>
+<summary>Stage 4: Clustering</summary>
 <div class="details-body">
 
 <div class="mermaid">
@@ -663,10 +604,13 @@ sequenceDiagram
   <li><code>main.py:381-402</code> &mdash; matching-step clustering</li>
   <li><code>main.py:743-801</code> &mdash; <code>cluster()</code> internals</li>
   <li><code>main.py:349-351</code> &mdash; <code>_matching_step_cfgs()</code></li>
-  <li><code>clustering/clustering.py</code> &mdash; main clustering logic, <code>get_clusterer()</code></li>
+  <li><code>clustering/clustering.py</code> &mdash; main clustering logic, <code>get_clusterer()</code>, <code>RecursiveHDBSCANClusterer</code>, <code>ScikitLearnClusterer</code></li>
   <li><code>clustering/mixture.py</code> &mdash; Gaussian mixture models</li>
   <li><code>clustering/agglomerate.py</code> &mdash; hierarchical clustering</li>
   <li><code>clustering/merge.py</code> &mdash; cluster merging</li>
+  <li><code>clustering/density.py</code> &mdash; <code>DensityPeaksClusterer</code></li>
+  <li><code>clustering/kmeans.py</code> &mdash; KMeans variants</li>
+  <li><code>clustering/forward_backward.py</code> &mdash; forward-backward algorithm</li>
 </ul>
 
 <h4>Configuration</h4>
@@ -681,9 +625,9 @@ sequenceDiagram
 </div>
 </details>
 
-<!-- Stage 6: Template Estimation -->
-<details id="stage-6">
-<summary>Stage 6: Template Estimation</summary>
+<!-- Stage 5: Template Estimation -->
+<details id="stage-5">
+<summary>Stage 5: Template Estimation</summary>
 <div class="details-body">
 
 <div class="mermaid">
@@ -753,9 +697,9 @@ flowchart TD
 </div>
 </details>
 
-<!-- Stage 7: Template Matching -->
-<details id="stage-7">
-<summary>Stage 7: Template Matching</summary>
+<!-- Stage 6: Template Matching -->
+<details id="stage-6">
+<summary>Stage 6: Template Matching</summary>
 <div class="details-body">
 
 <div class="mermaid">
@@ -825,7 +769,7 @@ sequenceDiagram
 <h4>Key Files</h4>
 <ul>
   <li><code>main.py:334-402</code> &mdash; matching loop</li>
-  <li><code>main.py:556-655</code> &mdash; <code>match()</code> function</li>
+  <li><code>main.py:556-656</code> &mdash; <code>match()</code> function</li>
   <li><code>peel/matching.py</code> &mdash; <code>ObjectiveUpdateTemplateMatchingPeeler</code></li>
   <li><code>peel_util.py:20-152</code> &mdash; <code>run_peeler()</code></li>
   <li><code>peel/matching_util/</code> &mdash; pairwise convolution, template matching utilities</li>
@@ -845,9 +789,9 @@ sequenceDiagram
 </div>
 </details>
 
-<!-- Stage 8: Refinement & Output -->
-<details id="stage-8">
-<summary>Stage 8: Refinement &amp; Output</summary>
+<!-- Stage 7: Refinement & Output -->
+<details id="stage-7">
+<summary>Stage 7: Refinement &amp; Output</summary>
 <div class="details-body">
 
 <div class="mermaid">
@@ -902,6 +846,70 @@ flowchart TD
   <li><code>util/data_util.py</code> &mdash; <code>DARTsortSorting</code> class</li>
   <li><code>main_util.py</code> &mdash; <code>ds_handle_delete_intermediate_features()</code></li>
 </ul>
+</div>
+</details>
+
+<!-- Featurization (embedded within peelers) -->
+<details id="featurization">
+<summary>Featurization &amp; Localization (embedded within peelers)</summary>
+<div class="details-body">
+
+<div class="invariant-box">
+  <strong>Note:</strong> Featurization is <strong>not</strong> a standalone pipeline stage &mdash; it occurs within the peelers during detection and matching via the <code>WaveformPipeline</code>. The actual top-level pipeline flow is: Detection &rarr; Motion &rarr; Clustering &rarr; [Matching Loop] &rarr; Finalize. Featurization happens inside <code>run_peeler()</code> at <code>peel_util.py:108-150</code>, where waveform transforms (PCA, localization, denoising) are applied to detected spikes as part of the peeling process.
+</div>
+
+<div class="mermaid">
+flowchart LR
+    A["Raw waveforms<br/>(n_spikes, n_time, n_channels)"] --> B["Whitening<br/><i>whiten.py</i>"]
+    B --> C["Temporal PCA<br/><i>temporal_pca.py</i>"]
+    C --> D["Localization NN<br/><i>amortized_localization.py</i>"]
+    D --> E["Denoising<br/><i>supervised_denoiser.py</i>"]
+    E --> F["Dimensionality reduction<br/><i>reduction.py</i>"]
+    F --> G["Amplitude estimation<br/><i>amplitudes.py</i>"]
+    G --> H["Feature vectors<br/>stored in HDF5"]
+</div>
+
+<h4>Inputs</h4>
+<table>
+  <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>waveforms</code></td><td><code>float32[n_spikes, n_time, n_channels]</code></td><td>Raw waveform snippets around detected peaks</td></tr>
+  <tr><td><code>motion</code></td><td><code>MotionInfo</code></td><td>Drift correction for spatial features</td></tr>
+</table>
+
+<h4>Outputs</h4>
+<table>
+  <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>point_source_localizations</code></td><td><code>float32[n_spikes, 4]</code></td><td>(x, y, z, alpha) spike positions</td></tr>
+  <tr><td><code>collisioncleaned_waveforms</code></td><td><code>float32[n_spikes, n_time, n_channels]</code></td><td>Denoised waveforms</td></tr>
+  <tr><td><code>features_pca</code></td><td><code>float32[n_spikes, n_components]</code></td><td>PCA-reduced features for clustering</td></tr>
+</table>
+
+<h4>Algorithm</h4>
+<p>Featurization is a composable <code>WaveformPipeline</code> of transformers, each with <code>.fit()</code>, <code>.transform()</code>, and <code>.fit_transform()</code> methods. The pipeline chains: whitening (decorrelate channels via noise covariance) &rarr; temporal PCA (reduce time dimension, e.g. 121 timepoints &rarr; 20 PCs) &rarr; neural-net localization (pretrained on simulated data, predicts x/y/z/alpha) &rarr; denoising &rarr; dimensionality reduction &rarr; amplitude estimation.</p>
+<p>This pipeline is invoked inside <code>run_peeler()</code> (<code>peel_util.py:108-150</code>) during both initial detection and template matching stages, not as a separate top-level pipeline step.</p>
+
+<h4>Key Files</h4>
+<ul>
+  <li><code>peel_util.py:108-150</code> &mdash; featurization invocation within <code>run_peeler()</code></li>
+  <li><code>transform/pipeline.py</code> &mdash; <code>WaveformPipeline</code> orchestrator</li>
+  <li><code>transform/amortized_localization.py</code> &mdash; <code>AmortizedLocalization</code> neural net</li>
+  <li><code>transform/temporal_pca.py</code> &mdash; <code>TemporalPCA</code></li>
+  <li><code>transform/whiten.py</code> &mdash; <code>Whitener</code></li>
+  <li><code>transform/supervised_denoiser.py</code> &mdash; supervised denoising</li>
+  <li><code>transform/reduction.py</code> &mdash; dimensionality reduction</li>
+  <li><code>transform/amplitudes.py</code> &mdash; amplitude estimation</li>
+</ul>
+
+<h4>Configuration</h4>
+<table>
+  <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
+  <tr><td><code>featurization_cfg.do_localization</code></td><td><code>bool</code></td><td><code>True</code></td><td>Run localization neural net</td></tr>
+  <tr><td><code>featurization_cfg.tpca_from_templates</code></td><td><code>bool</code></td><td><code>False</code></td><td>Fit TPCA basis from templates instead of data</td></tr>
+  <tr><td><code>featurization_cfg.denoise_only</code></td><td><code>bool</code></td><td><code>False</code></td><td>Skip localization, only denoise</td></tr>
+</table>
+
+<h4>Design Rationale</h4>
+<p>Neural-net localization over analytical methods: the pretrained NN is faster and more robust across probe geometries than point-source model fitting. The pipeline pattern allows each transform to be independently configured, swapped, or disabled. Embedding featurization inside the peeler rather than as a standalone stage allows detection and feature extraction to share waveform data without redundant I/O.</p>
 </div>
 </details>
 
