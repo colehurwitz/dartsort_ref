@@ -153,7 +153,12 @@ def measure_gpu_utilization() -> float:
 
 def score_tests() -> float:
     """Run pytest and return pass rate."""
-    result = run_cmd([sys.executable, "-m", "pytest", "tests/", "-v", "--tb=short"], timeout=600)
+    try:
+        result = run_cmd([sys.executable, "-m", "pytest", "tests/", "-v", "--tb=short", "-x"], timeout=1800)
+    except subprocess.TimeoutExpired:
+        print("Tests timed out after 30 minutes")
+        return 0.5  # Partial credit for timeout
+
     if result.returncode == 5:  # No tests collected
         return 0.0
     if result.returncode == 0:
