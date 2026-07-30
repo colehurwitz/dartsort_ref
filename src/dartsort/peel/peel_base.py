@@ -73,6 +73,7 @@ class BasePeeler(BModule):
         waveform_cfg: WaveformConfig = default_waveform_cfg,
         fixed_property_keys: Sequence[str] = ("channels", "times_seconds"),
         dtype=torch.float,
+        pin_memory: bool = True,
     ):
         if recording.get_num_segments() > 1:
             raise ValueError("Peeling does not yet support multi-segment recordings.")
@@ -101,6 +102,7 @@ class BasePeeler(BModule):
         )
         self.dtype: torch.dtype = dtype
         self.np_dtype = torch.empty((), dtype=dtype).numpy().dtype
+        self.pin_memory: bool = pin_memory
         if channel_index is not None:
             channel_index = torch.asarray(channel_index, copy=True).contiguous()
             self.register_buffer("channel_index", channel_index)
@@ -1281,7 +1283,7 @@ def _peeler_process_init(
     peeler.eval()
 
     # allocate pinned memory buffer for async CPU->GPU transfers
-    if device.type == "cuda" and torch.cuda.is_available():
+    if device.type == "cuda" and torch.cuda.is_available() and peeler.pin_memory:
         try:
             n_channels = peeler.recording.get_num_channels()
             clen = chunk_length_samples or peeler.chunk_length_samples
