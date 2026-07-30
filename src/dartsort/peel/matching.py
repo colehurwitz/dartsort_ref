@@ -24,7 +24,7 @@ from ..util.internal_config import (
 )
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
-from ..util.py_util import panic
+from ..util.py_util import nvtx_range, panic
 from ..util.waveform_util import full_channel_index, make_channel_index
 from .matching_util import (
     ChunkTemplateData,
@@ -326,8 +326,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         if max_iter is None:
             max_iter = self.p.max_iter
 
-        # note, this is chans major (transpose of traces)
-        traces_wh = chunk_template_data.whiten_traces(traces)
+        with nvtx_range("match:whiten_traces"):
+            traces_wh = chunk_template_data.whiten_traces(traces)
 
         # initialize residual
         residual = traces_wh.T if self.whiten_features else traces
@@ -352,9 +352,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             refrac_mask = None
 
         # initialize convolution
-        chunk_template_data.convolve(
-            traces_wh, padding=self.obj_pad_len, out=padded_conv
-        )
+        with nvtx_range("match:initial_convolve"):
+            chunk_template_data.convolve(
+                traces_wh, padding=self.obj_pad_len, out=padded_conv
+            )
 
         # main loop
         previous_peaks = current_peaks = prev_refrac_mask = None
@@ -517,9 +518,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         coarse_only=False,
     ):
         # update the coarse objective
-        chunk_template_data.obj_from_conv(
-            conv=padded_conv, out=padded_objective[:-1], scalings_out=padded_scalings
-        )
+        with nvtx_range("match:obj_from_conv"):
+            chunk_template_data.obj_from_conv(
+                conv=padded_conv, out=padded_objective[:-1], scalings_out=padded_scalings
+            )
 
         # enforce refractoriness
         objective = padded_objective[:-1]

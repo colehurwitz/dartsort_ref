@@ -19,6 +19,7 @@ from .peel import (
 )
 from .templates import TemplateData, estimate_template_library
 from .transform import WaveformPipeline
+from .util import py_util as _py_util
 from .util.data_util import DARTsortSorting, check_recording
 from .util.internal_config import (
     ClusteringConfig,
@@ -125,12 +126,17 @@ def dartsort(
     cfg = to_internal_config(cfg, recording.get_num_channels())
     ds_dump_config(cfg, output_dir)
 
+    # activate GPU profiling if configured
+    if cfg.enable_profiling:
+        _py_util.enable_profiling = True
+
     # in benchmarking, it can be useful to resume from initial detection
     # and/or clustering results stored in elsewhere to avoid rerunning
     ds_handle_link_from(cfg, output_dir)
 
-    # preprocess
-    recording = preprocess(recording, cfg.preprocessing, cfg.preprocessing_dtype)
+    # preprocess (Stage 1)
+    with timer("preprocess"):
+        recording = preprocess(recording, cfg.preprocessing, cfg.preprocessing_dtype)
 
     if cfg.work_in_tmpdir:
         with TemporaryDirectory(prefix="dartsort", dir=cfg.tmpdir_parent) as work_dir:
@@ -401,16 +407,17 @@ def _dartsort_impl(
             work_dir=work_dir,
         )
 
-    # finally handle scratch directory and delete intermediate files if requested
-    if work_dir is not None:
-        orig_h5_path = ensure_path(sorting.parent_h5_path, strict=True)
-        final_h5_path = output_dir / orig_h5_path.name
-        assert final_h5_path.exists()
-        sorting.parent_h5_path = final_h5_path
-    ds_handle_delete_intermediate_features(cfg, sorting, output_dir, work_dir)
+    # finalization (Stage 7)
+    with timer("finalization", ret["timing"]):
+        if work_dir is not None:
+            orig_h5_path = ensure_path(sorting.parent_h5_path, strict=True)
+            final_h5_path = output_dir / orig_h5_path.name
+            assert final_h5_path.exists()
+            sorting.parent_h5_path = final_h5_path
+        ds_handle_delete_intermediate_features(cfg, sorting, output_dir, work_dir)
 
-    sorting.save(output_dir / "dartsort_sorting.npz")
-    ret["sorting"] = sorting
+        sorting.save(output_dir / "dartsort_sorting.npz")
+        ret["sorting"] = sorting
 
     total_timer.stop()
     logger.dartsortdebug(f"Timing: {ret['timing']}")

@@ -21,6 +21,7 @@ from sympy import divisors
 from ..transform import WaveformPipeline
 from ..util.data_util import (
     SpikeDataset,
+    allocate_pinned_buffer,
     divide_randomly,
     extract_random_snips,
     subsample_waveforms,
@@ -34,7 +35,7 @@ from ..util.internal_config import (
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger, progbar
 from ..util.multiprocessing_util import handle_negative_jobs, pool_from_cfg
-from ..util.py_util import delay_keyboard_interrupt
+from ..util.py_util import delay_keyboard_interrupt, nvtx_range
 from ..util.torch_util import BModule, cleanup_and_log_gpu_usage
 
 logger = get_logger(__name__)
@@ -119,6 +120,7 @@ class BasePeeler(BModule):
             )
 
         self._rgs: local = local()
+        self._pinned_buffer: torch.Tensor | None = None
 
     # -- main functions for users to call
     # in practice users will interact with the functions `subtract(...)` in
@@ -392,6 +394,7 @@ class BasePeeler(BModule):
                             )
         finally:
             self.to("cpu")
+            self._pinned_buffer = None
 
             # we very much do not want to leak self into a global and have its
             # memory tied up while dartsort wants to go do other stuff
@@ -507,24 +510,26 @@ class BasePeeler(BModule):
             chunk_start_samples, chunk_end_samples
         )
         return_waveforms = not skip_features and bool(self.featurization_pipeline)
-        peel_result = self.peel_chunk(
-            chunk,
-            chunk_start_samples=chunk_start_samples,
-            left_margin=left_margin,
-            right_margin=right_margin,
-            return_waveforms=return_waveforms,
-            return_residual=return_residual or bool(n_resid_snips),
-            **peel_kw,
-        )
-        chunk_result = self.featurize_chunk_result(
-            peel_result=peel_result,
-            to_cpu=to_cpu,
-            return_waveforms=return_waveforms,
-            chunk_start_samples=chunk_start_samples,
-            chunk_end_samples=chunk_end_samples,
-            device=chunk.device,
-            n_resid_snips=n_resid_snips,
-        )
+        with nvtx_range("peel_chunk"):
+            peel_result = self.peel_chunk(
+                chunk,
+                chunk_start_samples=chunk_start_samples,
+                left_margin=left_margin,
+                right_margin=right_margin,
+                return_waveforms=return_waveforms,
+                return_residual=return_residual or bool(n_resid_snips),
+                **peel_kw,
+            )
+        with nvtx_range("featurize_chunk"):
+            chunk_result = self.featurize_chunk_result(
+                peel_result=peel_result,
+                to_cpu=to_cpu,
+                return_waveforms=return_waveforms,
+                chunk_start_samples=chunk_start_samples,
+                chunk_end_samples=chunk_end_samples,
+                device=chunk.device,
+                n_resid_snips=n_resid_snips,
+            )
         return chunk_result
 
     def get_chunk(self, chunk_start_samples: int, chunk_end_samples: int | None = None):
@@ -533,24 +538,38 @@ class BasePeeler(BModule):
             chunk_end_samples = chunk_start_samples + self.chunk_length_samples
             chunk_end_samples = min(Ts, chunk_end_samples)
         assert chunk_end_samples <= Ts
-        chunk, left_margin, right_margin = get_chunk_with_margin(
-            self.recording._recording_segments[0],
-            start_frame=chunk_start_samples,
-            end_frame=chunk_end_samples,
-            channel_indices=None,
-            margin=self.chunk_margin_samples,
-        )
+        with nvtx_range("get_chunk:read"):
+            chunk, left_margin, right_margin = get_chunk_with_margin(
+                self.recording._recording_segments[0],
+                start_frame=chunk_start_samples,
+                end_frame=chunk_end_samples,
+                channel_indices=None,
+                margin=self.chunk_margin_samples,
+            )
         assert isinstance(chunk, np.ndarray)
         device = self.b.channel_index.device
-        if device.type == "cpu":
-            chunk = torch.tensor(chunk, device=device, dtype=self.dtype)
-        else:
-            # we have to copy anyway to go to device, so working around the
-            # torch warning here. this way, can avoid blocking.
-            with catch_warnings():
-                filterwarnings("ignore", message="The given NumPy array is not ")
-                chunk = torch.from_numpy(chunk)
-                chunk = chunk.to(device=device, dtype=self.dtype, non_blocking=True)
+        with nvtx_range("get_chunk:to_device"):
+            if device.type == "cpu":
+                chunk = torch.tensor(chunk, device=device, dtype=self.dtype)
+            else:
+                with catch_warnings():
+                    filterwarnings("ignore", message="The given NumPy array is not ")
+                    chunk = torch.from_numpy(chunk)
+                    if self._pinned_buffer is not None:
+                        n = chunk.shape[0]
+                        if n <= self._pinned_buffer.shape[0]:
+                            self._pinned_buffer[:n].copy_(chunk)
+                            chunk = self._pinned_buffer[:n].to(
+                                device=device, dtype=self.dtype, non_blocking=True
+                            )
+                        else:
+                            chunk = chunk.pin_memory().to(
+                                device=device, dtype=self.dtype, non_blocking=True
+                            )
+                    else:
+                        chunk = chunk.to(
+                            device=device, dtype=self.dtype, non_blocking=True
+                        )
         return chunk, chunk_end_samples, left_margin, right_margin
 
     def featurize_chunk_result(
@@ -1260,6 +1279,20 @@ def _peeler_process_init(
     if not is_local:
         peeler.to(device)
     peeler.eval()
+
+    # allocate pinned memory buffer for async CPU->GPU transfers
+    if device.type == "cuda" and torch.cuda.is_available():
+        try:
+            n_channels = peeler.recording.get_num_channels()
+            clen = chunk_length_samples or peeler.chunk_length_samples
+            peeler._pinned_buffer = allocate_pinned_buffer(
+                chunk_length_samples=clen,
+                n_channels=n_channels,
+                margin_samples=peeler.chunk_margin_samples,
+                dtype=peeler.dtype,
+            )
+        except Exception:
+            peeler._pinned_buffer = None
 
     # update process-local variables
     _peeler_process_context.ctx = PeelerProcessContext(

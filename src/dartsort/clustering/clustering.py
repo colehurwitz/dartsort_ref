@@ -19,6 +19,7 @@ from ..util.job_util import ensure_computation_config
 from ..util.main_util import ds_save_intermediate_labels
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import handle_negative_jobs
+from ..util.py_util import nvtx_range
 from ..util.torch_util import cleanup_and_log_gpu_usage
 from . import (
     agglomerate,
@@ -201,9 +202,10 @@ class Clusterer:
         if features is None:
             pass
         else:
-            labels = self._cluster(
-                features, stable_features, sorting, recording, motion
-            )
+            with nvtx_range(f"cluster:{self.__class__.__name__}"):
+                labels = self._cluster(
+                    features, stable_features, sorting, recording, motion
+                )
             sorting = sorting.ephemeral_replace(labels=labels)
         if self.labels_fmt and self.save_labels_dir is not None:
             assert "{" not in self.labels_fmt

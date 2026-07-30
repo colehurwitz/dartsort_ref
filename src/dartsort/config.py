@@ -25,6 +25,17 @@ class DARTsortUserConfig:
     to the `dartsort()` function.
     """
 
+    # -- profiling / performance
+
+    enable_profiling: bool = False
+    """When True, enables NVTX range annotations and CUDA event timing
+    across all pipeline stages. Use with `nsys profile` for GPU profiling.
+    Zero overhead when False."""
+
+    pin_memory: bool = True
+    """Pin host memory before CPU->GPU transfers for async (non-blocking)
+    copies. Requires CUDA. Set to False on CPU-only systems."""
+
     # -- high level behavior
 
     do_motion_estimation: bool = True

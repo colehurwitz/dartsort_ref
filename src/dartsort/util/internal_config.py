@@ -987,6 +987,10 @@ class DARTsortInternalConfig:
     always_save_detailed_features: bool = False
     save_everything_on_error: bool = False
 
+    # profiling / performance
+    enable_profiling: bool = False
+    pin_memory: bool = True
+
 
 def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
     """Laundromat of configuration formats
@@ -1417,6 +1421,8 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         subsampling_spikes_per_channel=cfg.subsampling_spikes_per_channel,
         subsampling_presence=cfg.subsampling_presence,
         always_save_detailed_features=cfg.always_save_detailed_features,
+        enable_profiling=cfg.enable_profiling,
+        pin_memory=cfg.pin_memory,
     )
 
 

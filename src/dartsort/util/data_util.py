@@ -38,6 +38,22 @@ from .job_util import ensure_computation_config
 from .py_util import ensure_path, panic
 from .waveform_util import make_channel_index
 
+
+def allocate_pinned_buffer(
+    chunk_length_samples: int,
+    n_channels: int,
+    margin_samples: int = 0,
+    dtype=torch.float,
+) -> torch.Tensor:
+    """Allocate a page-locked (pinned) host tensor for async CPU->GPU transfers.
+
+    Returns a zeroed tensor in pinned memory. The caller should .copy_() into
+    it and then .to(device, non_blocking=True) for truly async transfers.
+    """
+    total_samples = chunk_length_samples + 2 * margin_samples
+    buf = torch.zeros(total_samples, n_channels, dtype=dtype)
+    return buf.pin_memory()
+
 logger = get_logger(__name__)
 
 # this is a data type used in the peeling code to store info about

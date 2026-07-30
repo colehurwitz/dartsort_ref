@@ -43,6 +43,26 @@ def databag(*args, slots=True, kw_only=True, eq=False, repr=False, **kwargs):
 
 _timer_stack = []
 
+# Module-level profiling flags. When enable_profiling is True, both NVTX and
+# CUDA event timing are activated (if CUDA is available). These can also be
+# controlled individually for advanced use.
+enable_profiling: bool = False
+enable_nvtx: bool = False
+enable_cuda_timing: bool = False
+
+_cuda_available: bool | None = None
+
+
+def _check_cuda() -> bool:
+    global _cuda_available
+    if _cuda_available is None:
+        try:
+            import torch
+            _cuda_available = torch.cuda.is_available()
+        except Exception:
+            _cuda_available = False
+    return _cuda_available
+
 
 class timer:
     """
@@ -54,6 +74,12 @@ class timer:
             pass
     assert np.isclose(tac.dt, 0)
     tic.results_dict # => nested timings
+
+    When enable_profiling or enable_nvtx is True and CUDA is available,
+    each timer context also pushes/pops an NVTX range (visible in Nsight
+    Systems). When enable_profiling or enable_cuda_timing is True, GPU
+    wall-clock time is recorded via cuda.Events and stored in
+    results_dict with a "_cuda" suffix.
     """
 
     def __init__(self, name="timer", results_dict=None, loglevel=DARTSORTVERBOSE):
@@ -61,17 +87,47 @@ class timer:
         self.name = name
         self.results_dict = results_dict
         self.parent = None
+        self._nvtx_active = False
+        self._cuda_events_active = False
+        self._start_event = None
+        self._end_event = None
 
     def start(self):
         self.t0 = perf_counter()
+        if (enable_profiling or enable_nvtx) and _check_cuda():
+            import torch.cuda
+            torch.cuda.nvtx.range_push(self.name)
+            self._nvtx_active = True
+        if (enable_profiling or enable_cuda_timing) and _check_cuda():
+            import torch.cuda
+            self._start_event = torch.cuda.Event(enable_timing=True)
+            self._end_event = torch.cuda.Event(enable_timing=True)
+            self._start_event.record()
+            self._cuda_events_active = True
 
     def stop(self):
+        if self._nvtx_active:
+            import torch.cuda
+            torch.cuda.nvtx.range_pop()
+            self._nvtx_active = False
+        if self._cuda_events_active:
+            self._end_event.record()
         self.dt = perf_counter() - self.t0
         logger.log(self.loglevel, "%s took %ss", self.name, self.dt)
         if self.parent is not None and self.results_dict is not None:
             self.results_dict[f"{self.parent.name}: {self.name}"] = self.dt
         elif self.results_dict is not None:
             self.results_dict[self.name] = self.dt
+        if self._cuda_events_active:
+            import torch.cuda
+            torch.cuda.synchronize()
+            cuda_dt = self._start_event.elapsed_time(self._end_event) / 1000.0
+            key = f"{self.name}_cuda"
+            if self.parent is not None and self.results_dict is not None:
+                self.results_dict[f"{self.parent.name}: {key}"] = cuda_dt
+            elif self.results_dict is not None:
+                self.results_dict[key] = cuda_dt
+            self._cuda_events_active = False
 
     def __enter__(self):
         global _timer_stack
@@ -88,6 +144,33 @@ class timer:
         self.stop()
         assert _timer_stack.pop() is self
         self.parent = None
+
+
+def nvtx_range(name: str):
+    """Lightweight NVTX-only context manager for hot-path annotations.
+
+    Unlike timer, this does NOT record CPU/CUDA times — it only emits
+    NVTX ranges visible in Nsight Systems. Zero cost when profiling is off.
+    """
+    if (enable_profiling or enable_nvtx) and _check_cuda():
+        return _NvtxRange(name)
+    return contextlib.nullcontext()
+
+
+class _NvtxRange:
+    __slots__ = ("name",)
+
+    def __init__(self, name: str):
+        self.name = name
+
+    def __enter__(self):
+        import torch.cuda
+        torch.cuda.nvtx.range_push(self.name)
+        return self
+
+    def __exit__(self, *args):
+        import torch.cuda
+        torch.cuda.nvtx.range_pop()
 
 
 class NoKeyboardInterrupt:

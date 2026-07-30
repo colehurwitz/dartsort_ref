@@ -26,7 +26,7 @@ from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
 from ..util.noise_util import Whitener
-from ..util.py_util import ensure_path
+from ..util.py_util import ensure_path, nvtx_range
 from ..util.spiketorch import ptp
 from . import TemplateData, realign
 from .templib import fit_tsvd, pca_from_templates, quick_mean_templates
@@ -148,31 +148,33 @@ def estimate_template_library(
     torch.cuda.empty_cache()
 
     # main task: get denoised templates from aligned spike train
-    templates = TemplateData.from_config(
-        recording=recording,
-        sorting=sorting,
-        motion=motion,
-        waveform_cfg=waveform_cfg,
-        template_cfg=template_cfg,
-        computation_cfg=computation_cfg,
-        tsvd=tsvd,
-        whitener=whitener,
-        featurization_basis=featurization_basis,
-    )
+    with nvtx_range("templates:estimate"):
+        templates = TemplateData.from_config(
+            recording=recording,
+            sorting=sorting,
+            motion=motion,
+            waveform_cfg=waveform_cfg,
+            template_cfg=template_cfg,
+            computation_cfg=computation_cfg,
+            tsvd=tsvd,
+            whitener=whitener,
+            featurization_basis=featurization_basis,
+        )
     gc.collect()
     torch.cuda.empty_cache()
 
     # merge units by template distance
-    sorting, templates = _handle_merge(
-        recording=recording,
-        sorting=sorting,
-        template_data=templates,
-        motion=motion,
-        merge_cfg=template_merge_cfg,
-        computation_cfg=computation_cfg,
-        waveform_cfg=waveform_cfg,
-        template_cfg=template_cfg,
-    )
+    with nvtx_range("templates:merge"):
+        sorting, templates = _handle_merge(
+            recording=recording,
+            sorting=sorting,
+            template_data=templates,
+            motion=motion,
+            merge_cfg=template_merge_cfg,
+            computation_cfg=computation_cfg,
+            waveform_cfg=waveform_cfg,
+            template_cfg=template_cfg,
+        )
     gc.collect()
     torch.cuda.empty_cache()
 
