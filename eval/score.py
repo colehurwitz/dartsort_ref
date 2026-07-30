@@ -2,15 +2,22 @@
 """Factory eval script for DARTsort performance optimization.
 
 Dimensions:
-  - benchmark_speed: time to sort 60s recording (normalized, lower is better)
+  - benchmark_speed: time to sort recording (normalized, lower is better)
   - benchmark_accuracy: mean accuracy on AIND hybrid benchmark
   - gpu_utilization: fraction of GPU compute used during sorting
   - tests: pytest pass rate
   - lint: ruff check clean
+
+Usage:
+  python eval/score.py                    # Full eval: 60s, all benchmarks (~50 min)
+  python eval/score.py --duration 10      # Quick: 10s recording (~5-10 min)
+  python eval/score.py --duration 30      # Medium: 30s recording (~20-25 min)
+  python eval/score.py --skip-benchmark   # Tests/lint only (~2 min)
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -24,10 +31,13 @@ BENCHMARK_REPO = "https://github.com/colehurwitz/i-need-build-spike.git"
 BENCHMARK_CACHE = Path("/tmp/spike-benchmark")
 AIND_CACHE = Path("/tmp/aind_cache")
 
-# Baseline values for normalization
-BASELINE_RUNTIME_S = 3000  # 50 minutes
-TARGET_RUNTIME_S = 600  # 10 minutes target
+# Baseline values for normalization (scaled by duration)
+# ~50 seconds of compute per second of recording (at 60s, this is ~3000s = 50min)
+BASELINE_RUNTIME_PER_SEC = 50
+# target: 10 seconds per second (near realtime)
+TARGET_RUNTIME_PER_SEC = 10
 BASELINE_ACCURACY = 0.868
+DEFAULT_DURATION = 60
 
 
 def run_cmd(cmd: list[str], cwd: Path | None = None, timeout: int = 120) -> subprocess.CompletedProcess[str]:
@@ -63,10 +73,15 @@ def setup_benchmark() -> bool:
     return True
 
 
-def run_benchmark() -> dict:
-    """Run the spike sorting benchmark and return results."""
+def run_benchmark(duration: int = DEFAULT_DURATION) -> dict:
+    """Run the spike sorting benchmark and return results.
+
+    Args:
+        duration: Duration of recording to benchmark in seconds.
+    """
+    baseline_runtime = BASELINE_RUNTIME_PER_SEC * duration
     results = {
-        "runtime_s": BASELINE_RUNTIME_S,
+        "runtime_s": baseline_runtime,
         "accuracy": 0.0,
         "gpu_utilization": 0.0,
         "error": None,
@@ -75,14 +90,13 @@ def run_benchmark() -> dict:
     output_dir = Path(tempfile.mkdtemp(prefix="dartsort_eval_"))
 
     try:
-        # Run benchmark with 60s duration
         cmd = [
             sys.executable,
             str(BENCHMARK_CACHE / "scripts" / "run_baselines.py"),
             "--config", str(BENCHMARK_CACHE / "configs" / "default_run.yaml"),
             "--output-dir", str(output_dir),
             "--cache-local", str(AIND_CACHE),
-            "--duration", "60",
+            "--duration", str(duration),
             "--benchmark", "aind_644864",  # Single benchmark for speed
         ]
 
@@ -177,14 +191,26 @@ def score_lint() -> float:
         return 0.5
 
 
-def score_benchmark_speed(runtime_s: float) -> float:
-    """Score based on runtime. Target is 10 min, baseline is 50 min."""
-    if runtime_s <= TARGET_RUNTIME_S:
+def score_benchmark_speed(runtime_s: float, duration: int = DEFAULT_DURATION) -> float:
+    """Score based on runtime, scaled by duration.
+
+    Args:
+        runtime_s: Actual runtime in seconds.
+        duration: Duration of recording that was benchmarked.
+
+    The baseline and target are scaled by duration:
+    - Baseline: 50 seconds of compute per second of recording
+    - Target: 10 seconds of compute per second of recording (near realtime)
+    """
+    baseline_runtime = BASELINE_RUNTIME_PER_SEC * duration
+    target_runtime = TARGET_RUNTIME_PER_SEC * duration
+
+    if runtime_s <= target_runtime:
         return 1.0
-    if runtime_s >= BASELINE_RUNTIME_S:
+    if runtime_s >= baseline_runtime:
         return 0.0
     # Linear interpolation
-    return (BASELINE_RUNTIME_S - runtime_s) / (BASELINE_RUNTIME_S - TARGET_RUNTIME_S)
+    return (baseline_runtime - runtime_s) / (baseline_runtime - target_runtime)
 
 
 def score_benchmark_accuracy(accuracy: float) -> float:
@@ -198,20 +224,53 @@ def score_benchmark_accuracy(accuracy: float) -> float:
 
 
 def main() -> None:
-    print("Setting up benchmark...")
-    if not setup_benchmark():
-        print(json.dumps({
-            "dimensions": {},
-            "composite": 0.0,
-            "error": "Failed to setup benchmark"
-        }))
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="Factory eval script for DARTsort performance optimization."
+    )
+    parser.add_argument(
+        "--duration",
+        type=int,
+        default=DEFAULT_DURATION,
+        help=f"Duration of recording to benchmark in seconds (default: {DEFAULT_DURATION})",
+    )
+    parser.add_argument(
+        "--skip-benchmark",
+        action="store_true",
+        help="Skip the benchmark entirely, only run tests/lint",
+    )
+    args = parser.parse_args()
 
-    print("Running benchmark (this may take a while)...")
-    benchmark_results = run_benchmark()
+    duration = args.duration
+    skip_benchmark = args.skip_benchmark
 
-    if benchmark_results.get("error"):
-        print(f"Benchmark error: {benchmark_results['error']}")
+    # Calculate scaled baselines for this duration
+    baseline_runtime = BASELINE_RUNTIME_PER_SEC * duration
+    target_runtime = TARGET_RUNTIME_PER_SEC * duration
+
+    if skip_benchmark:
+        print("Skipping benchmark (--skip-benchmark), using baseline values...")
+        # Use baseline values when skipping benchmark
+        benchmark_results = {
+            "runtime_s": baseline_runtime,
+            "accuracy": BASELINE_ACCURACY,
+            "gpu_utilization": 0.0,
+            "error": None,
+        }
+    else:
+        print("Setting up benchmark...")
+        if not setup_benchmark():
+            print(json.dumps({
+                "dimensions": {},
+                "composite": 0.0,
+                "error": "Failed to setup benchmark"
+            }))
+            sys.exit(1)
+
+        print(f"Running benchmark with {duration}s recording (this may take a while)...")
+        benchmark_results = run_benchmark(duration=duration)
+
+        if benchmark_results.get("error"):
+            print(f"Benchmark error: {benchmark_results['error']}")
 
     print("Running tests...")
     test_score = score_tests()
@@ -220,7 +279,7 @@ def main() -> None:
     lint_score = score_lint()
 
     # Calculate dimension scores
-    speed_score = score_benchmark_speed(benchmark_results["runtime_s"])
+    speed_score = score_benchmark_speed(benchmark_results["runtime_s"], duration=duration)
     accuracy_score = score_benchmark_accuracy(benchmark_results["accuracy"])
     gpu_score = benchmark_results.get("gpu_utilization", 0.0)
 
@@ -243,11 +302,13 @@ def main() -> None:
         "dimensions": dimensions,
         "composite": round(composite, 3),
         "metadata": {
+            "duration_s": duration,
             "runtime_s": round(benchmark_results["runtime_s"], 1),
             "accuracy": round(benchmark_results["accuracy"], 4),
-            "baseline_runtime_s": BASELINE_RUNTIME_S,
-            "target_runtime_s": TARGET_RUNTIME_S,
+            "baseline_runtime_s": baseline_runtime,
+            "target_runtime_s": target_runtime,
             "baseline_accuracy": BASELINE_ACCURACY,
+            "skip_benchmark": skip_benchmark,
         }
     }
 
