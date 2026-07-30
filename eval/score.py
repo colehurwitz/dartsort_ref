@@ -36,7 +36,8 @@ AIND_CACHE = Path("/tmp/aind_cache")
 BASELINE_RUNTIME_PER_SEC = 50
 # target: 10 seconds per second (near realtime)
 TARGET_RUNTIME_PER_SEC = 10
-BASELINE_ACCURACY = 0.868
+# Cross-dataset baseline: mean of 86.3%, 74.1%, 58.6% = 73.0%
+BASELINE_ACCURACY = 0.73
 DEFAULT_DURATION = 60
 
 
@@ -89,6 +90,9 @@ def run_benchmark(duration: int = DEFAULT_DURATION) -> dict:
 
     output_dir = Path(tempfile.mkdtemp(prefix="dartsort_eval_"))
 
+    # Run all 3 AIND benchmarks for cross-dataset accuracy
+    benchmarks = ["aind_644864", "aind_649943", "aind_666986"]
+
     try:
         cmd = [
             sys.executable,
@@ -97,11 +101,13 @@ def run_benchmark(duration: int = DEFAULT_DURATION) -> dict:
             "--output-dir", str(output_dir),
             "--cache-local", str(AIND_CACHE),
             "--duration", str(duration),
-            "--benchmark", "aind_644864",  # Single benchmark for speed
         ]
+        # Add all benchmarks
+        for bench in benchmarks:
+            cmd.extend(["--benchmark", bench])
 
         start_time = time.time()
-        result = run_cmd(cmd, timeout=7200)  # 2 hour timeout
+        result = run_cmd(cmd, timeout=14400)  # 4 hour timeout for 3 benchmarks
         elapsed = time.time() - start_time
 
         if result.returncode != 0:
@@ -110,24 +116,34 @@ def run_benchmark(duration: int = DEFAULT_DURATION) -> dict:
 
         results["runtime_s"] = elapsed
 
-        # Parse results
+        # Parse results - compute mean across all benchmarks
         results_file = output_dir / "dartsort_baselines.json"
         if results_file.exists():
             with open(results_file) as f:
                 data = json.load(f)
 
             if data.get("benchmarks"):
-                bench = data["benchmarks"][0]
-                metrics = bench.get("metrics", {}).get("summary", {})
-                results["accuracy"] = metrics.get("mean_accuracy", 0.0)
+                accuracies = []
+                total_runtime = 0.0
+                per_benchmark = {}
 
-                # Get timing from benchmark
-                timing = bench.get("timing", {})
-                if timing.get("sort_seconds"):
-                    results["runtime_s"] = timing["sort_seconds"]
+                for bench in data["benchmarks"]:
+                    metrics = bench.get("metrics", {}).get("summary", {})
+                    acc = metrics.get("mean_accuracy", 0.0)
+                    accuracies.append(acc)
+                    per_benchmark[bench["benchmark_name"]] = acc
+
+                    timing = bench.get("timing", {})
+                    if timing.get("sort_seconds"):
+                        total_runtime += timing["sort_seconds"]
+
+                # Mean accuracy across all datasets
+                results["accuracy"] = sum(accuracies) / len(accuracies) if accuracies else 0.0
+                results["per_benchmark"] = per_benchmark
+                results["runtime_s"] = total_runtime
 
     except subprocess.TimeoutExpired:
-        results["error"] = "Benchmark timed out after 2 hours"
+        results["error"] = "Benchmark timed out after 4 hours"
     except Exception as e:
         results["error"] = str(e)
 
