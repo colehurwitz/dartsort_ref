@@ -36,7 +36,7 @@ project: 0.6
 ## Benchmark Setup
 The benchmark is in a separate repo. To run:
 ```bash
-git clone https://github.com/colehurwitz/i-need-build-spike.git /tmp/spike-benchmark
+git clone https://github.com/colehurwitz/spike-benchmark.git /tmp/spike-benchmark
 cd /tmp/spike-benchmark
 pip install -e .
 pip install -e /path/to/dartsort_ref  # install local dartsort

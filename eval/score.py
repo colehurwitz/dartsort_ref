@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-BENCHMARK_REPO = "https://github.com/colehurwitz/i-need-build-spike.git"
+BENCHMARK_REPO = "https://github.com/colehurwitz/spike-benchmark.git"
 BENCHMARK_CACHE = Path("/tmp/spike-benchmark")
 AIND_CACHE = Path("/tmp/aind_cache")
 
