@@ -92,6 +92,11 @@ class DARTsortUserConfig:
     chunk_length_samples: int = 30_000
     """Batch size for data processing."""
 
+    max_spikes_per_batch: int = 16384
+    """Maximum number of spikes to process per batch during template matching.
+    If a chunk produces more spikes than this, results are still processed
+    but a warning is logged. Increase for high-density recordings."""
+
     # -- storage behavior
     work_in_tmpdir: bool = False
     """If True, dartsort will store all temporary data in a scratch directory in tmpdir_parent or TMPDIR."""

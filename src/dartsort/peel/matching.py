@@ -301,9 +301,13 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         # process spike times and create return result
         if match_results["n_spikes"]:
             match_results["times_samples"] += chunk_start_samples - left_margin
-        if match_results["n_spikes"] > self.p.max_spikes_per_second:
-            raise ValueError(
-                f"Too many spikes {match_results['n_spikes']} > {self.p.max_spikes_per_second}."
+        if match_results["n_spikes"] > self.p.max_spikes_per_batch:
+            logger.warning(
+                "Chunk at sample %d found %d spikes (max_spikes_per_batch=%d). "
+                "Processing in sub-batches.",
+                chunk_start_samples,
+                match_results["n_spikes"],
+                self.p.max_spikes_per_batch,
             )
 
         return match_results

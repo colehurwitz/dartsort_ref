@@ -155,6 +155,16 @@ class Decollider(BaseMultichannelDenoiser):
         if separate_cycle_net:
             assert cycle_loss_alpha > 0
 
+    def __getstate__(self):
+        state = super().__getstate__()
+        state.pop("step_callback", None)
+        return state
+
+    def __setstate__(self, state):
+        super().__setstate__(state)
+        if not hasattr(self, "step_callback"):
+            self.step_callback = None
+
     def initialize_spike_length_dependent_params(self):
         if hasattr(self, "inf_net"):
             logger.dartsortdebug("Already initialized.")

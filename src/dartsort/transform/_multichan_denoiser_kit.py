@@ -184,6 +184,23 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
             sc_args = (val_loss,) if val_loss is not None else loss
         scheduler.step(*sc_args)
 
+    def __getstate__(self):
+        target_device = str(self.device)
+        if self.device.type != "cpu":
+            self.to("cpu")
+        state = super().__getstate__()
+        state["_target_device"] = target_device
+        if target_device != "cpu":
+            self.to(target_device)
+        self._init_bgetter()
+        return state
+
+    def __setstate__(self, state):
+        target_device = state.pop("_target_device", "cpu")
+        super().__setstate__(state)
+        if target_device != "cpu":
+            self.to(target_device)
+
     @property
     def device(self) -> torch.device:
         return self.b.channel_index.device
