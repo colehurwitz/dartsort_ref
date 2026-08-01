@@ -192,7 +192,6 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         state["_target_device"] = target_device
         if target_device != "cpu":
             self.to(target_device)
-        self._init_bgetter()
         return state
 
     def __setstate__(self, state):
