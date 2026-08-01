@@ -71,6 +71,9 @@ class BModule(Module):
         except AttributeError:
             pass
         state = super().__getstate__()
+        # Restore ___bgetter on the original object after deletion
+        # This ensures the original object remains usable after pickling
+        self._init_bgetter()
         return state
 
     def __setstate__(self, state):

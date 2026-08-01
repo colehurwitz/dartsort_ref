@@ -767,7 +767,7 @@ class MatchingConfig:
 
     # peeling common
     chunk_length_samples: int = 30_000
-    max_spikes_per_second: int = 16384
+    max_spikes_per_batch: int = 16384
     cd_iter: int = 0
     coarse_cd: bool = True
 
@@ -1130,6 +1130,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
             amplitude_scaling_boundary=cfg.amplitude_scaling_boundary,
             up_factor=cfg.temporal_upsamples,
             chunk_length_samples=cfg.chunk_length_samples,
+            max_spikes_per_batch=cfg.max_spikes_per_batch,
             precomputed_templates_npz=cfg.precomputed_templates_npz,
             channel_selection_radius=cfg.channel_selection_radius,
             template_type=cfg.matching_template_type,
@@ -1277,6 +1278,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         amplitude_scaling_boundary=cfg.amplitude_scaling_boundary,
         up_factor=cfg.temporal_upsamples,
         chunk_length_samples=cfg.chunk_length_samples,
+        max_spikes_per_batch=cfg.max_spikes_per_batch,
         template_merge_cfg=TemplateMergeConfig(
             merge_distance_threshold=cfg.postprocessing_merge_threshold,
         ),
